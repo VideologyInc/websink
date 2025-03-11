@@ -103,7 +103,10 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         self.http_thread = None
         self.signaling = None
         self.signaling_thread = None
-        self.webrtcbin = None
+        self.encoder = None
+        self.payloader = None
+        self.convert = None
+        self.tee = None
         self.servers_started = False
 
         # Create internal elements
@@ -112,51 +115,119 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
     def setup_pipeline(self):
         """Set up the internal GStreamer pipeline."""
         # Create elements
-        self.webrtcbin = Gst.ElementFactory.make('webrtcbin', 'webrtc')
-        if not self.webrtcbin:
-            raise Exception("Could not create webrtcbin")
-
-        # Create videoconvert to handle any input format
-        convert = Gst.ElementFactory.make('videoconvert', 'convert')
-        if not convert:
+        self.convert = Gst.ElementFactory.make('videoconvert', 'convert')
+        if not self.convert:
             raise Exception("Could not create videoconvert")
 
         # Create encoding elements based on video-codec property
         if self.video_codec == 'vp8':
-            encoder = Gst.ElementFactory.make('vp8enc', 'encoder')
-            payloader = Gst.ElementFactory.make('rtpvp8pay', 'payloader')
+            self.encoder = Gst.ElementFactory.make('vp8enc', 'encoder')
+            self.payloader = Gst.ElementFactory.make('rtpvp8pay', 'payloader')
         elif self.video_codec == 'h264':
-            encoder = Gst.ElementFactory.make('x264enc', 'encoder')
-            payloader = Gst.ElementFactory.make('rtph264pay', 'payloader')
+            self.encoder = Gst.ElementFactory.make('x264enc', 'encoder')
+            self.payloader = Gst.ElementFactory.make('rtph264pay', 'payloader')
         else:
             raise Exception(f"Unsupported video codec: {self.video_codec}")
 
         # Configure elements
-        self.webrtcbin.set_property('stun-server', self.stun_server)
         if self.video_codec == 'h264':
-            encoder.set_property('tune', 'zerolatency')
-            encoder.set_property('speed-preset', 'ultrafast')
-            payloader.set_property('config-interval', -1)
-            payloader.set_property('aggregate-mode', 'zero-latency')
+            self.encoder.set_property('tune', 'zerolatency')
+            self.encoder.set_property('speed-preset', 'ultrafast')
+            self.payloader.set_property('config-interval', -1)
+            self.payloader.set_property('aggregate-mode', 'zero-latency')
+
+        # Create tee to split the stream for multiple clients
+        self.tee = Gst.ElementFactory.make('tee', 'tee')
+        if not self.tee:
+            raise Exception("Could not create tee")
+        self.tee.set_property('allow-not-linked', True)  # Important for dynamic clients
 
         # Add elements to bin
-        self.add(convert)
-        self.add(encoder)
-        self.add(payloader)
-        self.add(self.webrtcbin)
+        self.add(self.convert)
+        self.add(self.encoder)
+        self.add(self.payloader)
+        self.add(self.tee)
 
         # Link elements
-        convert.link(encoder)
-        encoder.link(payloader)
-        payloader.link(self.webrtcbin)
+        self.convert.link(self.encoder)
+        self.encoder.link(self.payloader)
+        self.payloader.link(self.tee)
 
         # Create sink pad
-        self.sink_pad = Gst.GhostPad.new('sink', convert.get_static_pad('sink'))
+        self.sink_pad = Gst.GhostPad.new('sink', self.convert.get_static_pad('sink'))
         self.add_pad(self.sink_pad)
 
-        # Connect to webrtcbin signals
-        self.webrtcbin.connect('on-negotiation-needed', self.on_negotiation_needed)
-        self.webrtcbin.connect('on-ice-candidate', self.on_ice_candidate)
+    def create_webrtcbin(self):
+        """Create a new WebRTCbin for a client connection."""
+        print("[WebRTCWebSink] Creating new WebRTCbin")
+
+        # Create a new webrtcbin
+        webrtcbin = Gst.ElementFactory.make('webrtcbin', None)
+        if not webrtcbin:
+            print("[WebRTCWebSink] Failed to create WebRTCbin")
+            return None
+
+        # Configure the webrtcbin
+        webrtcbin.set_property('stun-server', self.stun_server)
+
+        # Add it to our bin
+        self.add(webrtcbin)
+
+        # Create a queue for this client
+        queue = Gst.ElementFactory.make('queue', None)
+        queue.set_property('leaky', 2)  # Leak downstream (old buffers)
+        if not queue:
+            print("[WebRTCWebSink] Failed to create queue")
+            webrtcbin.set_state(Gst.State.NULL)
+            self.remove(webrtcbin)
+            return None
+
+        # Add the queue to our bin
+        self.add(queue)
+
+        # Get a source pad from the tee
+        tee_src_pad = self.tee.get_request_pad("src_%u")
+        if not tee_src_pad:
+            print("[WebRTCWebSink] Failed to get source pad from tee")
+            queue.set_state(Gst.State.NULL)
+            webrtcbin.set_state(Gst.State.NULL)
+            self.remove(queue)
+            self.remove(webrtcbin)
+            return None
+
+        # Get the sink pad from the queue
+        queue_sink_pad = queue.get_static_pad("sink")
+
+        # Link the tee to the queue
+        ret = tee_src_pad.link(queue_sink_pad)
+        if ret != Gst.PadLinkReturn.OK:
+            print(f"[WebRTCWebSink] Failed to link tee to queue: {ret}")
+            tee_src_pad.unlink(queue_sink_pad)
+            self.tee.release_request_pad(tee_src_pad)
+            queue.set_state(Gst.State.NULL)
+            webrtcbin.set_state(Gst.State.NULL)
+            self.remove(queue)
+            self.remove(webrtcbin)
+            return None
+
+        # Link the queue to the webrtcbin
+        ret = queue.link(webrtcbin)
+        if not ret:
+            print("[WebRTCWebSink] Failed to link queue to webrtcbin")
+            tee_src_pad.unlink(queue_sink_pad)
+            self.tee.release_request_pad(tee_src_pad)
+            queue.set_state(Gst.State.NULL)
+            webrtcbin.set_state(Gst.State.NULL)
+            self.remove(queue)
+            self.remove(webrtcbin)
+            return None
+
+        # Sync the element states with the parent
+        queue.sync_state_with_parent()
+        webrtcbin.sync_state_with_parent()
+
+        print("[WebRTCWebSink] Successfully created and linked WebRTCbin")
+        return webrtcbin
 
     def do_get_property(self, prop):
         """Handle property reads."""
@@ -183,8 +254,7 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
             self.bind_address = value
         elif prop.name == 'stun-server':
             self.stun_server = value
-            if self.webrtcbin:
-                self.webrtcbin.set_property('stun-server', value)
+            # This will apply to new WebRTCbins created
         elif prop.name == 'video-codec':
             self.video_codec = value
         else:
@@ -239,9 +309,9 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
 
         # Start WebSocket signaling server
         self.signaling = SignalingServer(
-            self.webrtcbin,
-            self.bind_address,
-            self.ws_port
+            self.create_webrtcbin,
+            host=self.bind_address,
+            port=self.ws_port
         )
         self.signaling_thread = threading.Thread(target=self.signaling.start)
         self.signaling_thread.daemon = True
@@ -261,17 +331,6 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
             self.signaling.stop()
             self.signaling = None
             self.signaling_thread = None
-
-    def on_negotiation_needed(self, element):
-        """Handle WebRTC negotiation."""
-        if self.signaling:
-            print("[WebRTCWebSink] Negotiation needed, forwarding to signaling server")
-            self.signaling.on_negotiation_needed(element)
-
-    def on_ice_candidate(self, element, mlineindex, candidate):
-        """Handle new ICE candidates."""
-        if self.signaling:
-            self.signaling.on_ice_candidate(element, mlineindex, candidate)
 
 # Register the GObject type
 GObject.type_register(WebRTCWebSink)

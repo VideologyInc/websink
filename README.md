@@ -46,7 +46,7 @@ pipeline.set_state(Gst.State.PLAYING)
 Run the included test application:
 
 ```bash
-./install_and_test.sh
+python3 ./test_webrtcwebsink.py
 ```
 
 Then open your web browser to http://localhost:8080 to view the test stream.
