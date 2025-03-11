@@ -1,0 +1,62 @@
+import os
+from http.server import SimpleHTTPRequestHandler
+from typing import Union, Tuple, Optional
+from urllib.parse import urlparse
+
+class WebRTCHTTPHandler(SimpleHTTPRequestHandler):
+    """Custom HTTP handler for serving the WebRTC client files."""
+
+    def __init__(self, *args, **kwargs):
+        # Get the directory containing this file
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        self.static_dir = os.path.join(current_dir, 'static')
+        super().__init__(*args, directory=self.static_dir, **kwargs)
+
+    def translate_path(self, path: str) -> str:
+        """Translate URL path to filesystem path."""
+        # Parse the path
+        parsed_path = urlparse(path).path
+
+        # Default to index.html for root path
+        if parsed_path == '/':
+            parsed_path = '/index.html'
+
+        # Remove leading slash and join with static directory
+        clean_path = parsed_path.lstrip('/')
+        return os.path.join(self.static_dir, clean_path)
+
+    def do_GET(self):
+        """Handle GET requests."""
+        try:
+            # Get the filesystem path
+            file_path = self.translate_path(self.path)
+
+            # Check if file exists
+            if not os.path.exists(file_path):
+                self.send_error(404, "File not found")
+                return
+
+            # Serve the file
+            self.path = '/' + os.path.relpath(file_path, self.static_dir)
+            super().do_GET()
+
+        except Exception as e:
+            print(f"HTTP Server Error: {e}")
+            self.send_error(500, str(e))
+
+    def log_message(self, format: str, *args: any) -> None:
+        """Override to provide more useful logging."""
+        print(f"HTTP Server: {format%args}")
+
+    def guess_type(self, path: str) -> str:
+        """Guess the type of a file based on its extension."""
+        base, ext = os.path.splitext(path)
+
+        if ext == '.js':
+            return 'application/javascript'
+        elif ext == '.html':
+            return 'text/html'
+        elif ext == '.css':
+            return 'text/css'
+
+        return super().guess_type(path)

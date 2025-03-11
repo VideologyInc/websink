@@ -1,0 +1,277 @@
+import os
+import json
+import asyncio
+import threading
+import time
+from http.server import HTTPServer
+import socket
+
+import gi
+gi.require_version('Gst', '1.0')
+gi.require_version('GstBase', '1.0')
+gi.require_version('GstWebRTC', '1.0')
+gi.require_version('GstSdp', '1.0')
+from gi.repository import Gst, GObject, GstWebRTC, GstSdp
+
+from .http_server import WebRTCHTTPHandler
+from .signaling import SignalingServer
+
+# Define the GObject type
+class WebRTCWebSink(Gst.Bin, GObject.Object):
+    """
+    A GStreamer bin that acts as a WebRTC sink for streaming to web browsers.
+    Includes an HTTP server for serving the client webpage and a WebSocket server
+    for signaling.
+    """
+
+    # Register GObject type
+    __gtype_name__ = 'WebRTCWebSink'
+
+    # Register GStreamer plugin metadata
+    __gstmetadata__ = (
+        'WebRTC Web Sink',
+        'Sink',
+        'Stream video/audio to browsers using WebRTC',
+        'Your Name'
+    )
+
+    # Register pad templates
+    __gsttemplates__ = (
+        Gst.PadTemplate.new(
+            'sink',
+            Gst.PadDirection.SINK,
+            Gst.PadPresence.ALWAYS,
+            Gst.Caps.from_string('video/x-raw,format={RGBA,RGB,I420,YV12,YUY2,UYVY,NV12,NV21}')
+        ),
+    )
+
+    # Register properties
+    __gproperties__ = {
+        'port': (
+            int,
+            'HTTP Port',
+            'Port for the HTTP server (default: 8080)',
+            1,
+            65535,
+            8080,
+            GObject.ParamFlags.READWRITE
+        ),
+        'ws-port': (
+            int,
+            'WebSocket Port',
+            'Port for the WebSocket signaling server (default: 8081)',
+            1,
+            65535,
+            8081,
+            GObject.ParamFlags.READWRITE
+        ),
+        'bind-address': (
+            str,
+            'Bind Address',
+            'Address to bind servers to (default: 0.0.0.0)',
+            '0.0.0.0',
+            GObject.ParamFlags.READWRITE
+        ),
+        'stun-server': (
+            str,
+            'STUN Server',
+            'STUN server URI (default: stun://stun.l.google.com:19302)',
+            'stun://stun.l.google.com:19302',
+            GObject.ParamFlags.READWRITE
+        ),
+        'video-codec': (
+            str,
+            'Video Codec',
+            'Video codec to use (default: vp8)',
+            'vp8',
+            GObject.ParamFlags.READWRITE
+        ),
+    }
+
+    def __init__(self):
+        Gst.Bin.__init__(self)
+
+        # Initialize properties
+        self.port = 8080
+        self.ws_port = 8081
+        self.bind_address = '0.0.0.0'
+        self.stun_server = 'stun://stun.l.google.com:19302'
+        self.video_codec = 'vp8'
+
+        # Initialize state
+        self.http_server = None
+        self.http_thread = None
+        self.signaling = None
+        self.signaling_thread = None
+        self.webrtcbin = None
+        self.servers_started = False
+
+        # Create internal elements
+        self.setup_pipeline()
+
+    def setup_pipeline(self):
+        """Set up the internal GStreamer pipeline."""
+        # Create elements
+        self.webrtcbin = Gst.ElementFactory.make('webrtcbin', 'webrtc')
+        if not self.webrtcbin:
+            raise Exception("Could not create webrtcbin")
+
+        # Create videoconvert to handle any input format
+        convert = Gst.ElementFactory.make('videoconvert', 'convert')
+        if not convert:
+            raise Exception("Could not create videoconvert")
+
+        # Create encoding elements based on video-codec property
+        if self.video_codec == 'vp8':
+            encoder = Gst.ElementFactory.make('vp8enc', 'encoder')
+            payloader = Gst.ElementFactory.make('rtpvp8pay', 'payloader')
+        elif self.video_codec == 'h264':
+            encoder = Gst.ElementFactory.make('x264enc', 'encoder')
+            payloader = Gst.ElementFactory.make('rtph264pay', 'payloader')
+        else:
+            raise Exception(f"Unsupported video codec: {self.video_codec}")
+
+        # Configure elements
+        self.webrtcbin.set_property('stun-server', self.stun_server)
+        if self.video_codec == 'h264':
+            encoder.set_property('tune', 'zerolatency')
+            encoder.set_property('speed-preset', 'ultrafast')
+            payloader.set_property('config-interval', -1)
+            payloader.set_property('aggregate-mode', 'zero-latency')
+
+        # Add elements to bin
+        self.add(convert)
+        self.add(encoder)
+        self.add(payloader)
+        self.add(self.webrtcbin)
+
+        # Link elements
+        convert.link(encoder)
+        encoder.link(payloader)
+        payloader.link(self.webrtcbin)
+
+        # Create sink pad
+        self.sink_pad = Gst.GhostPad.new('sink', convert.get_static_pad('sink'))
+        self.add_pad(self.sink_pad)
+
+        # Connect to webrtcbin signals
+        self.webrtcbin.connect('on-negotiation-needed', self.on_negotiation_needed)
+        self.webrtcbin.connect('on-ice-candidate', self.on_ice_candidate)
+
+    def do_get_property(self, prop):
+        """Handle property reads."""
+        if prop.name == 'port':
+            return self.port
+        elif prop.name == 'ws-port':
+            return self.ws_port
+        elif prop.name == 'bind-address':
+            return self.bind_address
+        elif prop.name == 'stun-server':
+            return self.stun_server
+        elif prop.name == 'video-codec':
+            return self.video_codec
+        else:
+            raise AttributeError(f'Unknown property {prop.name}')
+
+    def do_set_property(self, prop, value):
+        """Handle property writes."""
+        if prop.name == 'port':
+            self.port = value
+        elif prop.name == 'ws-port':
+            self.ws_port = value
+        elif prop.name == 'bind-address':
+            self.bind_address = value
+        elif prop.name == 'stun-server':
+            self.stun_server = value
+            if self.webrtcbin:
+                self.webrtcbin.set_property('stun-server', value)
+        elif prop.name == 'video-codec':
+            self.video_codec = value
+        else:
+            raise AttributeError(f'Unknown property {prop.name}')
+
+    def handle_message(self, message):
+        """Handle GStreamer messages."""
+        if message.type == Gst.MessageType.ERROR:
+            error, debug = message.parse_error()
+            print(f"Error: {error.message}")
+            print(f"Debug info: {debug}")
+        return Gst.Bin.handle_message(self, message)
+
+    def do_change_state(self, transition):
+        """Handle state changes."""
+        if transition == Gst.StateChange.NULL_TO_READY:
+            # Start servers only if they haven't been started yet
+            if not self.servers_started:
+                try:
+                    self.start_servers()
+                    self.servers_started = True
+                except Exception as e:
+                    print(f"Failed to start servers: {e}")
+                    return Gst.StateChangeReturn.FAILURE
+        elif transition == Gst.StateChange.READY_TO_NULL:
+            # Stop servers only if they are running
+            if self.servers_started:
+                self.stop_servers()
+                self.servers_started = False
+
+        return Gst.Bin.do_change_state(self, transition)
+
+    def start_servers(self):
+        """Start the HTTP and WebSocket servers."""
+        # Create HTTP server socket with address reuse
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((self.bind_address, self.port))
+        sock.listen(1)
+
+        # Create HTTP server with the bound socket
+        self.http_server = HTTPServer(
+            (self.bind_address, self.port),
+            WebRTCHTTPHandler,
+            bind_and_activate=False
+        )
+        self.http_server.socket = sock
+
+        self.http_thread = threading.Thread(target=self.http_server.serve_forever)
+        self.http_thread.daemon = True
+        self.http_thread.start()
+
+        # Start WebSocket signaling server
+        self.signaling = SignalingServer(
+            self.webrtcbin,
+            self.bind_address,
+            self.ws_port
+        )
+        self.signaling_thread = threading.Thread(target=self.signaling.start)
+        self.signaling_thread.daemon = True
+        self.signaling_thread.start()
+
+        # Wait a bit for the server to start
+        time.sleep(0.5)
+
+    def stop_servers(self):
+        """Stop the HTTP and WebSocket servers."""
+        if self.http_server:
+            self.http_server.shutdown()
+            self.http_server = None
+            self.http_thread = None
+
+        if self.signaling:
+            self.signaling.stop()
+            self.signaling = None
+            self.signaling_thread = None
+
+    def on_negotiation_needed(self, element):
+        """Handle WebRTC negotiation."""
+        if self.signaling:
+            print("[WebRTCWebSink] Negotiation needed, forwarding to signaling server")
+            self.signaling.on_negotiation_needed(element)
+
+    def on_ice_candidate(self, element, mlineindex, candidate):
+        """Handle new ICE candidates."""
+        if self.signaling:
+            self.signaling.on_ice_candidate(element, mlineindex, candidate)
+
+# Register the GObject type
+GObject.type_register(WebRTCWebSink)
