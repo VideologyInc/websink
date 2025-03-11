@@ -275,3 +275,4 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
 
 # Register the GObject type
 GObject.type_register(WebRTCWebSink)
+__gstelementfactory__ = ("webrtcwebsink", Gst.Rank.NONE, WebRTCWebSink)

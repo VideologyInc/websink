@@ -6,19 +6,34 @@ import threading
 import os
 
 gi.require_version('Gst', '1.0')
-from gi.repository import Gst, GLib
+from gi.repository import Gst, GLib, GObject
+
+# os.environ['GST_DEBUG'] = '4'
+Gst.init(None)
+
+import webrtcwebsink
+
+def plugin_init(plugin):
+    return Gst.Element.register(plugin, "webrtcwebsink", Gst.Rank.NONE, webrtcwebsink.WebRTCWebSink)
 
 def main():
-    # Enable debug output
-    # os.environ['GST_DEBUG'] = '4'
-
-    # Initialize GStreamer
-    Gst.init(None)
-
-    # Import our plugin to ensure it's registered
     try:
-        import webrtcwebsink
-        print("Successfully imported webrtcwebsink plugin")
+        # Register the plugin
+        if not Gst.Plugin.register_static(
+            Gst.VERSION_MAJOR,
+            Gst.VERSION_MINOR,
+            "webrtcwebsink",
+            "WebRTC Web Sink",
+            plugin_init,
+            "",
+            "",
+            "webrtcwebsink",
+            "webrtcwebsink",
+            ""
+        ):
+            raise RuntimeError("Failed to register webrtcwebsink plugin")
+        print("Successfully registered webrtcwebsink plugin")
+
     except Exception as e:
         print(f"Error importing webrtcwebsink: {e}", file=sys.stderr)
         sys.exit(1)
