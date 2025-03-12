@@ -6,6 +6,8 @@ import time
 import logging
 from http.server import HTTPServer
 import socket
+from termcolor import colored
+from urllib.parse import quote
 
 import gi
 gi.require_version('Gst', '1.0')
@@ -18,8 +20,12 @@ from .http_server import WebRTCHTTPHandler
 from .signaling import SignalingServer
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('webrtcwebsink.plugin')
+logging.basicConfig(
+    format='%(asctime)s.%(msecs)03d %(levelname)-6s [ %(pathname)s:%(lineno)d ]    %(message)s',
+    datefmt='%H:%M:%S',
+    level=logging.INFO,
+)
 
 # Define the GObject type
 class WebRTCWebSink(Gst.Bin, GObject.Object):
@@ -97,11 +103,11 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         Gst.Bin.__init__(self)
 
         # Initialize properties
-        self.port = 8080
-        self.ws_port = 8081
+        self.port = 8098
+        self.ws_port = 8099
         self.bind_address = '0.0.0.0'
         self.stun_server = 'stun://stun.l.google.com:19302'
-        self.video_codec = 'vp8'
+        self.video_codec = 'h264'
 
         # Initialize state
         self.http_server = None
@@ -129,15 +135,16 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
             self.encoder = Gst.ElementFactory.make('vp8enc', 'encoder')
             self.payloader = Gst.ElementFactory.make('rtpvp8pay', 'payloader')
         elif self.video_codec == 'h264':
-            self.encoder = Gst.ElementFactory.make('x264enc', 'encoder')
+            self.encoder = Gst.ElementFactory.make('vpuenc_h264', 'encoder')
             self.payloader = Gst.ElementFactory.make('rtph264pay', 'payloader')
         else:
             raise Exception(f"Unsupported video codec: {self.video_codec}")
 
         # Configure elements
         if self.video_codec == 'h264':
-            self.encoder.set_property('tune', 'zerolatency')
-            self.encoder.set_property('speed-preset', 'ultrafast')
+            # qp-max=30 qp-min=20
+            self.encoder.set_property('qp-max', 30)
+            self.encoder.set_property('qp-min', 18)
             self.payloader.set_property('config-interval', -1)
             self.payloader.set_property('aggregate-mode', 'zero-latency')
 
@@ -326,7 +333,10 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         self.signaling_thread.start()
 
         # Wait a bit for the server to start
-        time.sleep(0.5)
+        time.sleep(0.3)
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        print("video up at: " + colored(f"http://{hostname}.local:{self.port}", 'green', attrs=['underline']) + " or " + colored(f"http://{ip_address}:{self.port}", 'green', attrs=['underline']))
 
     def stop_servers(self):
         """Stop the HTTP and WebSocket servers."""

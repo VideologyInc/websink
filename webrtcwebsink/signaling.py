@@ -10,7 +10,7 @@ gi.require_version('GstSdp', '1.0')
 from gi.repository import Gst, GObject, GstWebRTC, GstSdp
 
 # Configure logging
-logger = logging.getLogger('webrtcwebsink.signaling')
+logger = logging.getLogger('webrtcwebsink.signal')
 
 class SignalingServer:
     def __init__(self, webrtcbin_factory, host='0.0.0.0', port=8081):

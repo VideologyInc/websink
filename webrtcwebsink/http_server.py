@@ -2,11 +2,11 @@ import os
 import json
 import logging
 from http.server import SimpleHTTPRequestHandler
-from typing import Union, Tuple, Optional
+from typing import Union, Tuple
 from urllib.parse import urlparse
 
 # Configure logging
-logger = logging.getLogger('webrtcwebsink.http')
+logger = logging.getLogger('webrtcwebsink.server')
 
 class WebRTCHTTPHandler(SimpleHTTPRequestHandler):
     """Custom HTTP handler for serving the WebRTC client files."""
@@ -69,7 +69,7 @@ class WebRTCHTTPHandler(SimpleHTTPRequestHandler):
         """Override to provide more useful logging."""
         logger.info(f"{format%args}")
 
-    def guess_type(self, path: str) -> str:
+    def guess_type(self, path) -> str:
         """Guess the type of a file based on its extension."""
         base, ext = os.path.splitext(path)
 
