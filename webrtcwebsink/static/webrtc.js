@@ -118,8 +118,23 @@ async function start() {
 
         console.log('Starting WebRTC connection...');
 
+        // Fetch configuration from server
+        let wsPort;
+        try {
+            const response = await fetch('/api/config');
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const config = await response.json();
+            wsPort = config.ws_port;
+            console.log('Fetched WebSocket port from server:', wsPort);
+        } catch (error) {
+            console.warn('Failed to fetch config, using default port:', error);
+            wsPort = 8081; // Fallback to default port
+        }
+
         // Connect to signaling server
-        const wsUrl = `ws://${window.location.hostname}:8081`;
+        const wsUrl = `ws://${window.location.hostname}:${wsPort}`;
         console.log('Connecting to WebSocket server at:', wsUrl);
         ws = new WebSocket(wsUrl);
 

@@ -296,6 +296,9 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         sock.listen(1)
 
         # Create HTTP server with the bound socket
+        # Set the WebSocket port in the handler class
+        WebRTCHTTPHandler.ws_port = self.ws_port
+
         self.http_server = HTTPServer(
             (self.bind_address, self.port),
             WebRTCHTTPHandler,

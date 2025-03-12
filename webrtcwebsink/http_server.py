@@ -1,10 +1,13 @@
 import os
+import json
 from http.server import SimpleHTTPRequestHandler
 from typing import Union, Tuple, Optional
 from urllib.parse import urlparse
 
 class WebRTCHTTPHandler(SimpleHTTPRequestHandler):
     """Custom HTTP handler for serving the WebRTC client files."""
+
+    ws_port = 8081  # Default WebSocket port
 
     def __init__(self, *args, **kwargs):
         # Get the directory containing this file
@@ -28,6 +31,20 @@ class WebRTCHTTPHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         """Handle GET requests."""
         try:
+            # Handle API endpoints
+            if self.path == '/api/config':
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Cache-Control', 'no-cache')
+                self.end_headers()
+
+                # Send WebSocket port as JSON
+                config = {
+                    'ws_port': self.ws_port
+                }
+                self.wfile.write(json.dumps(config).encode('utf-8'))
+                return
+
             # Get the filesystem path
             file_path = self.translate_path(self.path)
 
