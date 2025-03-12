@@ -50,8 +50,7 @@ def main():
     pipeline_str = '''
         videotestsrc is-live=true !
         videoconvert !
-        video/x-raw,format=RGBA,width=640,height=480,framerate=30/1 !
-        queue !
+        video/x-raw,width=1280,height=720,framerate=30/1 !
         webrtcwebsink name=sink
     '''
 

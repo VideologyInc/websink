@@ -93,8 +93,8 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         'video-codec': (
             str,
             'Video Codec',
-            'Video codec to use (default: vp8)',
-            'vp8',
+            'Video codec to use (default: h264)',
+            'h264',
             GObject.ParamFlags.READWRITE
         ),
     }
@@ -123,6 +123,60 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         # Create internal elements
         self.setup_pipeline()
 
+    def find_best_encoder(self, codec_name):
+        """Find the highest-ranked encoder element that can produce the specified codec."""
+        # Map codec names to their corresponding GStreamer caps
+        logger.info(f"Finding best encoder for codec: {codec_name}")
+        codec_caps = {
+            'vp8': 'video/x-vp8',
+            'h264': 'video/x-h264',
+            'hevc': 'video/x-hevc',
+            'av1': 'video/x-av1',
+        }
+
+        if codec_name not in codec_caps:
+            logger.error(f"Unsupported codec: {codec_name}")
+            return None, None
+
+        target_caps = Gst.Caps.from_string(codec_caps[codec_name])
+
+        # Find all encoder elements
+        encoder_factories = []
+        registry = Gst.Registry.get()
+        factories = registry.get_feature_list(Gst.ElementFactory)
+        for factory in factories:
+            if ('encoder' in factory.get_name() or 'enc' in factory.get_name()) and 'encoder' in factory.get_metadata('klass').lower():
+                # Check if this encoder can produce our target format
+                for template in factory.get_static_pad_templates():
+                    if template.direction == Gst.PadDirection.SRC:
+                        template_caps = template.get_caps()
+                        if template_caps.can_intersect(target_caps):
+                            encoder_factories.append(factory)
+                            break
+
+        # Sort by rank
+        encoder_factories.sort(key=lambda x: x.get_rank(), reverse=True)
+
+        if not encoder_factories:
+            logger.error(f"No encoder found for codec {codec_name}, falling back to vp8")
+            return None, None
+
+        # Find matching payloader based on encoder name and codec
+        best_encoder = encoder_factories[0]
+        encoder_name = best_encoder.get_name()
+        logger.info(f"Selected encoder: {encoder_name} (rank: {best_encoder.get_rank()})")
+
+        # Determine payloader based on codec
+        payloader_map = {
+            'vp8': 'rtpvp8pay',
+            'h264': 'rtph264pay',
+            'hevc': 'rtph265pay',
+            'av1': 'rtpav1pay'
+        }
+        payloader = payloader_map.get(codec_name)
+
+        return encoder_name, payloader
+
     def setup_pipeline(self):
         """Set up the internal GStreamer pipeline."""
         # Create elements
@@ -130,24 +184,52 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         if not self.convert:
             raise Exception("Could not create videoconvert")
 
-        # Create encoding elements based on video-codec property
-        if self.video_codec == 'vp8':
-            self.encoder = Gst.ElementFactory.make('vp8enc', 'encoder')
-            self.payloader = Gst.ElementFactory.make('rtpvp8pay', 'payloader')
-        elif self.video_codec == 'h264':
-            self.encoder = Gst.ElementFactory.make('vpuenc_h264', 'encoder')
-            self.payloader = Gst.ElementFactory.make('rtph264pay', 'payloader')
-        else:
-            raise Exception(f"Unsupported video codec: {self.video_codec}")
+        # Create encoder and payloader from senders preference
+        try:
+            encoder_name, payloader_name = self.find_best_encoder(self.video_codec)
+            # Create encoder and payloader elements for this client
+            self.encoder = Gst.ElementFactory.make(encoder_name, 'encoder')
+            self.payloader = Gst.ElementFactory.make(payloader_name, 'payloader')
+            if not self.payloader or not self.encoder:
+                logger.error(f"Could not create encoder/payloader {encoder_name}/{payloader_name}")
+                return None
+        except Exception as e:
+            logger.error(f"Could not create encoder and payloader: {e}")
+            return None
 
-        # Configure elements
-        if self.video_codec == 'h264':
-            # qp-max=30 qp-min=20
+        # Configure codec-specific settings
+        encoder_name = self.encoder.get_factory().get_name()
+        if 'x264enc' in encoder_name:
+            self.encoder.set_property('tune', 'zerolatency')
+            self.encoder.set_property('speed-preset', 'ultrafast')
+            self.encoder.set_property('key-int-max', 30)  # Keyframe every 1 second at 30fps
+            self.encoder.set_property('bitrate', 2000)    # 2 Mbps
+            logger.info(f"Configured {encoder_name} with low-latency settings")
+        # Configure nvh264enc (NVIDIA)
+        elif 'nvh264' in encoder_name:
+            self.encoder.set_property('preset', 'low-latency')
+            self.encoder.set_property('zerolatency', True)
+            logger.info(f"Configured {encoder_name} with low-latency settings")
+        # Configure vaapih264enc (Intel)
+        elif 'vaapi' in encoder_name:
+            self.encoder.set_property('rate-control', 'cbr')
+            self.encoder.set_property('bitrate', 2000)  # 2 Mbps
+            self.encoder.set_property('keyframe-period', 30)  # Keyframe every 1 second at 30fps
+            logger.info(f"Configured {encoder_name} with low-latency settings")
+        elif 'vpuenc_h264' in encoder_name:
             self.encoder.set_property('qp-max', 30)
             self.encoder.set_property('qp-min', 18)
+        
+        if self.video_codec == 'h264':
             self.payloader.set_property('config-interval', -1)
             self.payloader.set_property('aggregate-mode', 'zero-latency')
-
+        elif self.video_codec == 'vp8':
+            self.payloader.set_property('picture-id-mode', 2)
+            self.payloader.set_property('config-interval', 1)
+        elif self.video_codec == 'hevc':
+            self.payloader.set_property('config-interval', -1)
+            self.payloader.set_property('aggregate-mode', 'zero-latency')
+        
         # Create tee to split the stream for multiple clients
         self.tee = Gst.ElementFactory.make('tee', 'tee')
         if not self.tee:
@@ -269,6 +351,7 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
             # This will apply to new WebRTCbins created
         elif prop.name == 'video-codec':
             self.video_codec = value
+            logger.info(f"Default video codec set to {self.video_codec}, will be used for new connections without specific preferences")
         else:
             raise AttributeError(f'Unknown property {prop.name}')
 

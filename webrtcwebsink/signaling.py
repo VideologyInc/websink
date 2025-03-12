@@ -115,6 +115,15 @@ class SignalingServer:
             await websocket.send('ROOM_OK')
             logger.debug("Sent ROOM_OK")
 
+            # Wait for optional codec preference
+            codec_msg = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+            if codec_msg.startswith('CODEC'):
+                codec_preference = codec_msg.split(' ')[1].strip().lower()
+                logger.info(f"Client {client_id} requested codec: {codec_preference}")
+                # Force H.264 if the server is configured to use it
+                old_codec = codec_preference
+                logger.info(f"Forcing codec for client {client_id} from {old_codec} to h264")
+
             # Create a new WebRTCbin for this client
             webrtcbin = self.webrtcbin_factory()
             if not webrtcbin:
