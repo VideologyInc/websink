@@ -3,6 +3,7 @@ import json
 import asyncio
 import threading
 import time
+import logging
 from http.server import HTTPServer
 import socket
 
@@ -15,6 +16,10 @@ from gi.repository import Gst, GObject, GstWebRTC, GstSdp
 
 from .http_server import WebRTCHTTPHandler
 from .signaling import SignalingServer
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger('webrtcwebsink.plugin')
 
 # Define the GObject type
 class WebRTCWebSink(Gst.Bin, GObject.Object):
@@ -159,12 +164,12 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
 
     def create_webrtcbin(self):
         """Create a new WebRTCbin for a client connection."""
-        print("[WebRTCWebSink] Creating new WebRTCbin")
+        logger.info("Creating new WebRTCbin")
 
         # Create a new webrtcbin
         webrtcbin = Gst.ElementFactory.make('webrtcbin', None)
         if not webrtcbin:
-            print("[WebRTCWebSink] Failed to create WebRTCbin")
+            logger.error("Failed to create WebRTCbin")
             return None
 
         # Configure the webrtcbin
@@ -177,7 +182,7 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         queue = Gst.ElementFactory.make('queue', None)
         queue.set_property('leaky', 2)  # Leak downstream (old buffers)
         if not queue:
-            print("[WebRTCWebSink] Failed to create queue")
+            logger.error("Failed to create queue")
             webrtcbin.set_state(Gst.State.NULL)
             self.remove(webrtcbin)
             return None
@@ -188,7 +193,7 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         # Get a source pad from the tee
         tee_src_pad = self.tee.get_request_pad("src_%u")
         if not tee_src_pad:
-            print("[WebRTCWebSink] Failed to get source pad from tee")
+            logger.error("Failed to get source pad from tee")
             queue.set_state(Gst.State.NULL)
             webrtcbin.set_state(Gst.State.NULL)
             self.remove(queue)
@@ -201,7 +206,7 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         # Link the tee to the queue
         ret = tee_src_pad.link(queue_sink_pad)
         if ret != Gst.PadLinkReturn.OK:
-            print(f"[WebRTCWebSink] Failed to link tee to queue: {ret}")
+            logger.error(f"Failed to link tee to queue: {ret}")
             tee_src_pad.unlink(queue_sink_pad)
             self.tee.release_request_pad(tee_src_pad)
             queue.set_state(Gst.State.NULL)
@@ -213,7 +218,7 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         # Link the queue to the webrtcbin
         ret = queue.link(webrtcbin)
         if not ret:
-            print("[WebRTCWebSink] Failed to link queue to webrtcbin")
+            logger.error("Failed to link queue to webrtcbin")
             tee_src_pad.unlink(queue_sink_pad)
             self.tee.release_request_pad(tee_src_pad)
             queue.set_state(Gst.State.NULL)
@@ -226,7 +231,7 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         queue.sync_state_with_parent()
         webrtcbin.sync_state_with_parent()
 
-        print("[WebRTCWebSink] Successfully created and linked WebRTCbin")
+        logger.info("Successfully created and linked WebRTCbin")
         return webrtcbin
 
     def do_get_property(self, prop):
@@ -264,8 +269,8 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         """Handle GStreamer messages."""
         if message.type == Gst.MessageType.ERROR:
             error, debug = message.parse_error()
-            print(f"Error: {error.message}")
-            print(f"Debug info: {debug}")
+            logger.error(f"Error: {error.message}")
+            logger.debug(f"Debug info: {debug}")
         return Gst.Bin.handle_message(self, message)
 
     def do_change_state(self, transition):
@@ -277,7 +282,7 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
                     self.start_servers()
                     self.servers_started = True
                 except Exception as e:
-                    print(f"Failed to start servers: {e}")
+                    logger.error(f"Failed to start servers: {e}")
                     return Gst.StateChangeReturn.FAILURE
         elif transition == Gst.StateChange.READY_TO_NULL:
             # Stop servers only if they are running
