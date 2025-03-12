@@ -32,19 +32,19 @@ def main():
             ""
         ):
             raise RuntimeError("Failed to register webrtcwebsink plugin")
-        print("Successfully registered webrtcwebsink plugin")
+        # print("Successfully registered webrtcwebsink plugin")
 
     except Exception as e:
-        print(f"Error importing webrtcwebsink: {e}", file=sys.stderr)
+        # print(f"Error importing webrtcwebsink: {e}", file=sys.stderr)
         sys.exit(1)
 
     # List available elements to verify plugin registration
     registry = Gst.Registry.get()
     factory = registry.find_feature("webrtcwebsink", Gst.ElementFactory)
     if not factory:
-        print("webrtcwebsink element not found in registry!", file=sys.stderr)
+        # print("webrtcwebsink element not found in registry!", file=sys.stderr)
         sys.exit(1)
-    print("Found webrtcwebsink element in registry")
+    # print("Found webrtcwebsink element in registry")
 
     # Create the pipeline
     pipeline_str = '''
@@ -57,19 +57,19 @@ def main():
 
     try:
         # Create and start the pipeline
-        print("Creating pipeline...")
+        # print("Creating pipeline...")
         pipeline = Gst.parse_launch(pipeline_str)
         if not pipeline:
-            print("Failed to create pipeline", file=sys.stderr)
+            # print("Failed to create pipeline", file=sys.stderr)
             sys.exit(1)
 
         # Set properties if needed
-        print("Getting sink element...")
+        # print("Getting sink element...")
         sink = pipeline.get_by_name('sink')
         if not sink:
-            print("Failed to find webrtcwebsink element", file=sys.stderr)
+            # print("Failed to find webrtcwebsink element", file=sys.stderr)
             sys.exit(1)
-        print("Successfully got sink element")
+        # print("Successfully got sink element")
 
         # Create GLib main loop
         loop = GLib.MainLoop()
@@ -78,18 +78,19 @@ def main():
         def bus_call(bus, message, loop):
             t = message.type
             if t == Gst.MessageType.EOS:
-                print("End-of-stream")
+                # print("End-of-stream")
                 loop.quit()
             elif t == Gst.MessageType.ERROR:
                 err, debug = message.parse_error()
-                print(f"Error: {err.message}", file=sys.stderr)
+                # print(f"Error: {err.message}", file=sys.stderr)
                 if debug:
-                    print(f"Debug info: {debug}", file=sys.stderr)
+                    # print(f"Debug info: {debug}", file=sys.stderr)
+                    pass
                 loop.quit()
             elif t == Gst.MessageType.STATE_CHANGED:
                 if message.src == pipeline:
                     old_state, new_state, pending_state = message.parse_state_changed()
-                    print(f"Pipeline state changed from {old_state.value_nick} to {new_state.value_nick}")
+                    # print(f"Pipeline state changed from {old_state.value_nick} to {new_state.value_nick}")
             return True
 
         # Add bus watch
@@ -99,33 +100,33 @@ def main():
 
         # Handle Ctrl+C gracefully
         def signal_handler(sig, frame):
-            print("\nStopping pipeline...")
+            # print("\nStopping pipeline...")
             pipeline.set_state(Gst.State.NULL)
             loop.quit()
 
         signal.signal(signal.SIGINT, signal_handler)
 
         # Start playing
-        print("Setting pipeline to PLAYING...")
+        # print("Setting pipeline to PLAYING...")
         ret = pipeline.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
-            print("Failed to start pipeline", file=sys.stderr)
+            # print("Failed to start pipeline", file=sys.stderr)
             sys.exit(1)
 
-        print("Pipeline is playing")
-        print("Open your web browser to http://localhost:8080")
-        print("Press Ctrl+C to stop")
+        # print("Pipeline is playing")
+        # print("Open your web browser to http://localhost:8080")
+        # print("Press Ctrl+C to stop")
 
         # Start the main loop
         try:
             loop.run()
         except Exception as e:
-            print(f"Error in main loop: {e}", file=sys.stderr)
+            # print(f"Error in main loop: {e}", file=sys.stderr)
             pipeline.set_state(Gst.State.NULL)
             sys.exit(1)
 
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        # print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
 if __name__ == '__main__':
