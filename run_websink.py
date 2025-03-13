@@ -49,8 +49,8 @@ def main():
     # Create the pipeline
     pipeline_str = '''
         videotestsrc is-live=true !
-        videoconvert !
         video/x-raw,width=1280,height=720,framerate=30/1 !
+        videoconvert !
         webrtcwebsink name=sink
     '''
 

@@ -116,7 +116,7 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         self.signaling_thread = None
         self.encoder = None
         self.payloader = None
-        self.convert = None
+        # self.convert = None
         self.tee = None
         self.servers_started = False
 
@@ -180,9 +180,9 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
     def setup_pipeline(self):
         """Set up the internal GStreamer pipeline."""
         # Create elements
-        self.convert = Gst.ElementFactory.make('videoconvert', 'convert')
-        if not self.convert:
-            raise Exception("Could not create videoconvert")
+        # self.convert = Gst.ElementFactory.make('videoconvert', 'convert')
+        # if not self.convert:
+        #     raise Exception("Could not create videoconvert")
 
         # Create encoder and payloader from senders preference
         try:
@@ -237,18 +237,18 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         self.tee.set_property('allow-not-linked', True)  # Important for dynamic clients
 
         # Add elements to bin
-        self.add(self.convert)
+        # self.add(self.convert)
         self.add(self.encoder)
         self.add(self.payloader)
         self.add(self.tee)
 
         # Link elements
-        self.convert.link(self.encoder)
+        # self.convert.link(self.encoder)
         self.encoder.link(self.payloader)
         self.payloader.link(self.tee)
 
         # Create sink pad
-        self.sink_pad = Gst.GhostPad.new('sink', self.convert.get_static_pad('sink'))
+        self.sink_pad = Gst.GhostPad.new('sink', self.encoder.get_static_pad('sink'))
         self.add_pad(self.sink_pad)
 
     def create_webrtcbin(self):

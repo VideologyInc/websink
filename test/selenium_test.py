@@ -72,10 +72,13 @@ def start_pipeline():
         # Create the pipeline
         pipeline_str = '''
             videotestsrc is-live=true !
-            videoconvert !
             video/x-raw,width=640,height=480,framerate=30/1 !
+            videoconvert !
             webrtcwebsink name=sink port=8098 ws-port=8099
         '''
+        print("\nStarting GStreamer pipeline:")
+        print(f"Pipeline string: {pipeline_str}")
+
         print("Creating pipeline")
         pipeline = Gst.parse_launch(pipeline_str)
 
