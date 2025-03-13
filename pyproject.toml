@@ -19,6 +19,13 @@ dependencies = [
     "requests",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest-selenium",
+    "pytest",
+    "webdriver-manager",
+]
+
 [tool.setuptools]
 packages = ["webrtcwebsink"]
 package-data = {"webrtcwebsink" = ["static/*"]}

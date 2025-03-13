@@ -289,6 +289,13 @@ def test_image_comparison(gstreamer_pipeline, chrome_driver):
         print("Waiting for WebRTC connection to establish")
         time.sleep(1)
 
+        # Verify the WebRTC connection status using JavaScript
+        connection_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.connectionState : 'undefined'")
+        ice_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.iceConnectionState : 'undefined'")
+        # assert connection_state is not None, "Connection state is None"
+        # assert ice_state is not None, "ICE state is None"
+        print(f"WebRTC connection state: {connection_state}, ICE state: {ice_state}")
+
         # Capture a new screenshot for comparison
         print("Taking new screenshot for comparison")
         new_screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chrome_screenshot.png')

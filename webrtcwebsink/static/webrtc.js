@@ -2,6 +2,9 @@
 let pc = null;
 let ws = null;
 
+// Expose peerConnection globally for testing
+window.peerConnection = null;
+
 // DOM elements
 const statusElement = document.getElementById('status');
 const videoElement = document.getElementById('stream');
@@ -85,6 +88,8 @@ function createPeerConnection() {
     };
 
     pc = new RTCPeerConnection(config);
+    // Set global reference for testing
+    window.peerConnection = pc;
     console.log('Created new peer connection');
 
     // Set up video handling
@@ -117,14 +122,70 @@ function createPeerConnection() {
     };
 
     // Connection monitoring
+    // Store last error for debugging
+    window.lastWebRTCError = null;
+
     pc.onconnectionstatechange = () => {
         console.log('Connection state changed:', pc.connectionState);
         setStatus('Connection: ' + pc.connectionState);
+
+        // Log detailed state
+        console.log('Detailed WebRTC State:', {
+            connectionState: pc.connectionState,
+            iceConnectionState: pc.iceConnectionState,
+            iceGatheringState: pc.iceGatheringState,
+            signalingState: pc.signalingState,
+            hasLocalDescription: !!pc.localDescription,
+            hasRemoteDescription: !!pc.remoteDescription
+        });
+
+        if (pc.connectionState === 'failed') {
+            window.lastWebRTCError = 'Connection failed';
+            console.error('WebRTC connection failed');
+            // Log transceivers state
+            pc.getTransceivers().forEach((transceiver, idx) => {
+                console.log(`Transceiver ${idx}:`, {
+                    currentDirection: transceiver.currentDirection,
+                    direction: transceiver.direction,
+                    mid: transceiver.mid,
+                    stopped: transceiver.stopped
+                });
+            });
+        }
     };
 
     pc.oniceconnectionstatechange = () => {
         console.log('ICE connection state:', pc.iceConnectionState);
         setStatus('ICE connection: ' + pc.iceConnectionState);
+
+        if (pc.iceConnectionState === 'failed') {
+            window.lastWebRTCError = 'ICE connection failed';
+            console.error('ICE connection failed');
+            // Get ICE candidates
+            pc.getStats().then(stats => {
+                stats.forEach(report => {
+                    if (report.type === 'candidate-pair' ||
+                        report.type === 'local-candidate' ||
+                        report.type === 'remote-candidate') {
+                        console.log(`ICE Candidate Stats (${report.type}):`, report);
+                    }
+                });
+            });
+        }
+    };
+
+    pc.onicegatheringstatechange = () => {
+        console.log('ICE gathering state:', pc.iceGatheringState);
+        if (pc.iceGatheringState === 'complete') {
+            console.log('ICE gathering complete');
+        }
+    };
+
+    pc.onsignalingstatechange = () => {
+        console.log('Signaling state:', pc.signalingState);
+        if (pc.signalingState === 'stable') {
+            console.log('Signaling state is stable');
+        }
     };
 
     pc.onicecandidate = (event) => {
@@ -245,28 +306,105 @@ async function start() {
                                 pc = createPeerConnection();
                             }
 
+                            // Check signaling state before proceeding
+                            if (pc.signalingState !== 'stable') {
+                                console.log('Signaling state not stable:', pc.signalingState);
+                                console.log('Waiting for signaling state to stabilize...');
+                                await new Promise(resolve => setTimeout(resolve, 1000));
+                            }
+
+                            console.log('Setting remote description with offer:', data.offer);
+                            console.log('Received offer SDP:', data.offer.sdp);
                             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+                            console.log('Remote description set successfully');
+
+                            // Log connection state after setting remote description
+                            console.log('Connection states after remote description:', {
+                                connectionState: pc.connectionState,
+                                iceConnectionState: pc.iceConnectionState,
+                                signalingState: pc.signalingState,
+                                iceGatheringState: pc.iceGatheringState
+                            });
+
+                            console.log('Creating answer...');
                             const answer = await pc.createAnswer({
                                 offerToReceiveVideo: true
                             });
-                            await pc.setLocalDescription(answer);
+                            console.log('Answer SDP:', answer.sdp);
 
+                            console.log('Setting local description...');
+                            await pc.setLocalDescription(answer);
+                            console.log('Local description set successfully');
+
+                            // Log connection state after setting local description
+                            console.log('Connection states after local description:', {
+                                connectionState: pc.connectionState,
+                                iceConnectionState: pc.iceConnectionState,
+                                signalingState: pc.signalingState,
+                                iceGatheringState: pc.iceGatheringState
+                            });
+
+                            // Log transceivers state
+                            // pc.getTransceivers().forEach((transceiver, idx) => {
+                            //     console.log(`Transceiver ${idx}:`, {
+                            //         currentDirection: transceiver.currentDirection,
+                            //         direction: transceiver.direction,
+                            //         mid: transceiver.mid,
+                            //         sender: transceiver.sender.track ? transceiver.sender.track.kind : 'no track',
+                            //         receiver: transceiver.receiver.track ? transceiver.receiver.track.kind : 'no track'
+                            //     });
+                            // });
+
+                            // Send answer to server
                             ws.send(`ROOM_PEER_MSG server ${JSON.stringify({
                                 answer: answer
                             })}`);
+                            console.log('Answer sent to server');
                         } catch (error) {
                             console.error('Error during offer/answer:', error);
+                            console.error('Error details:', {
+                                name: error.name,
+                                message: error.message,
+                                stack: error.stack
+                            });
                             showError('Error during offer/answer: ' + error.message);
                         }
                     } else if (data.iceCandidate) {
                         try {
                             console.log('Received ICE candidate:', data.iceCandidate);
                             if (pc) {
+                                // Log ICE states before adding candidate
+                                console.log('ICE states before adding candidate:', {
+                                    iceConnectionState: pc.iceConnectionState,
+                                    iceGatheringState: pc.iceGatheringState
+                                });
+
                                 await pc.addIceCandidate(data.iceCandidate);
                                 console.log('Added ICE candidate successfully');
+
+                                // Log ICE states after adding candidate
+                                console.log('ICE states after adding candidate:', {
+                                    iceConnectionState: pc.iceConnectionState,
+                                    iceGatheringState: pc.iceGatheringState
+                                });
+
+                                // Log all current ICE candidates
+                                const stats = await pc.getStats();
+                                stats.forEach(report => {
+                                    if (report.type === 'candidate-pair' || report.type === 'local-candidate' || report.type === 'remote-candidate') {
+                                        console.log(`ICE Candidate Stats (${report.type}):`, report);
+                                    }
+                                });
+                            } else {
+                                console.warn('Received ICE candidate but no peer connection exists');
                             }
                         } catch (error) {
                             console.error('Error adding ICE candidate:', error);
+                            console.error('Error details:', {
+                                name: error.name,
+                                message: error.message,
+                                stack: error.stack
+                            });
                         }
                     }
                 }

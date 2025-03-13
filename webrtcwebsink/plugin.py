@@ -22,10 +22,13 @@ from .signaling import SignalingServer
 # Configure logging
 logger = logging.getLogger('webrtcwebsink.plugin')
 logging.basicConfig(
-    format='%(asctime)s.%(msecs)03d %(levelname)-6s [ %(pathname)s:%(lineno)d ]    %(message)s',
+    format='%(asctime)s.%(msecs)03d %(levelname)-6s [ %(filename)20s:%(lineno)-3d ]    %(message)s',
     datefmt='%H:%M:%S',
     level=logging.INFO,
 )
+logging.addLevelName( logging.WARNING, f"\033[1;31m{logging.getLevelName(logging.WARNING)}\033[1;0m")
+logging.addLevelName( logging.ERROR,   f"\033[1;41m{logging.getLevelName(logging.ERROR  )}\033[1;0m")
+logging.addLevelName( logging.INFO,    f"\033[1;32m{logging.getLevelName(logging.INFO)}\033[1;0m")
 
 # Define the GObject type
 class WebRTCWebSink(Gst.Bin, GObject.Object):
@@ -263,6 +266,24 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
 
         # Configure the webrtcbin
         webrtcbin.set_property('stun-server', self.stun_server)
+        webrtcbin.set_property('bundle-policy', 'max-bundle')  # Use bundle policy for better compatibility
+
+        # Log configuration
+        logger.info("WebRTCBin configured with:")
+        logger.info(f"  STUN server: {self.stun_server}")
+        logger.info(f"  Bundle policy: {webrtcbin.get_property('bundle-policy')}")
+
+        # Add debugging signal handlers
+        webrtcbin.connect('pad-added', lambda element, pad:
+            logger.info(f"New pad added: {pad.get_name()}"))
+        webrtcbin.connect('pad-removed', lambda element, pad:
+            logger.info(f"Pad removed: {pad.get_name()}"))
+
+        # Connect to additional signals for debugging
+        webrtcbin.connect('on-negotiation-needed', lambda element: logger.info("Negotiation needed"))
+        webrtcbin.connect('on-ice-candidate', lambda element, mlineindex, candidate:
+            logger.info(f"New ICE candidate: mlineindex={mlineindex}, candidate={candidate}"))
+        webrtcbin.connect('on-new-transceiver', self._on_new_transceiver)
 
         # Add it to our bin
         self.add(webrtcbin)
@@ -432,6 +453,29 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
             self.signaling.stop()
             self.signaling = None
             self.signaling_thread = None
+
+    def _on_new_transceiver(self, webrtcbin, transceiver):
+        """Handle new transceiver creation."""
+        logger.info("New transceiver created:")
+        logger.info(f"  Direction: {transceiver.get_property('direction')}")
+        logger.info(f"  Current direction: {transceiver.get_property('current-direction')}")
+        logger.info(f"  MID: {transceiver.get_property('mid')}")
+        logger.info(f"  Kind: {transceiver.get_property('kind')}")
+
+    def _on_data_channel(self, webrtcbin, channel):
+        """Handle data channel creation."""
+        logger.info(f"Data channel created: {channel}")
+
+    def _on_ice_gathering_state_changed(self, webrtcbin, state):
+        """Handle ICE gathering state changes."""
+        logger.info(f"ICE gathering state changed to: {state}")
+        if state == GstWebRTC.WebRTCICEGatheringState.COMPLETE:
+            # Get and log all ICE candidates
+            logger.info("ICE gathering complete, current candidates:")
+            for i in range(webrtcbin.get_property('ice-gather-timeout')):
+                candidate = webrtcbin.emit('get-ice-candidate', i)
+                if candidate:
+                    logger.info(f"  Candidate {i}: {candidate}")
 
 # Register the GObject type
 GObject.type_register(WebRTCWebSink)

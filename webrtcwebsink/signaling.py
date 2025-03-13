@@ -161,6 +161,14 @@ class SignalingServer:
                         if 'answer' in data:
                             logger.info(f"Processing answer SDP from client {client_id}")
                             try:
+                                answer_sdp = data['answer']['sdp']
+                                logger.info(f"Received SDP answer from client {client_id}:\n{answer_sdp}")
+
+                                # Log WebRTCBin state before processing answer
+                                logger.info(f"WebRTCBin state before processing answer:")
+                                logger.info(f"  ICE connection state: {webrtcbin.get_property('ice-connection-state')}")
+                                logger.info(f"  Connection state: {webrtcbin.get_property('connection-state')}")
+
                                 _, sdpmsg = GstSdp.SDPMessage.new()
                                 GstSdp.sdp_message_parse_buffer(bytes(data['answer']['sdp'].encode()), sdpmsg)
                                 answer = GstWebRTC.WebRTCSessionDescription.new(GstWebRTC.WebRTCSDPType.ANSWER, sdpmsg)
@@ -168,10 +176,19 @@ class SignalingServer:
                                 # Use the client's WebRTCbin
                                 promise = Gst.Promise.new()
                                 webrtcbin.emit('set-remote-description', answer, promise)
+
+                                # Log WebRTCBin state after processing answer
+                                logger.info(f"WebRTCBin state after processing answer:")
+                                logger.info(f"  ICE connection state: {webrtcbin.get_property('ice-connection-state')}")
+                                logger.info(f"  Connection state: {webrtcbin.get_property('connection-state')}")
+
                                 promise.interrupt()
                                 logger.info(f"Successfully set remote description for client {client_id}")
                             except Exception as e:
                                 logger.error(f"Error setting remote description: {e}")
+                                logger.error(f"Error details: {str(e)}")
+                                import traceback
+                                logger.error(f"Traceback: {traceback.format_exc()}")
 
                         elif 'iceCandidate' in data:
                             logger.debug(f"Processing ICE candidate from client {client_id}")
@@ -241,7 +258,7 @@ class SignalingServer:
 
             # Convert offer to string and store it
             offer_sdp = offer.sdp.as_text()
-            logger.debug(f"Converted SDP for client {client_id}")
+            logger.info(f"Generated SDP offer for client {client_id}:\n{offer_sdp}")
 
             # Send offer to this client
             message = json.dumps({
@@ -252,6 +269,12 @@ class SignalingServer:
             })
             message = f"ROOM_PEER_MSG server {message}"
             logger.info(f"Sending offer to client {client_id}")
+            logger.info(f"Offer SDP:\n{offer_sdp}")
+
+            # Log WebRTCBin state before sending offer
+            logger.info(f"WebRTCBin state before sending offer:")
+            logger.info(f"  ICE connection state: {webrtcbin.get_property('ice-connection-state')}")
+            logger.info(f"  Connection state: {webrtcbin.get_property('connection-state')}")
 
             # Send the offer to the client
             asyncio.run_coroutine_threadsafe(
