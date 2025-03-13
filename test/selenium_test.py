@@ -159,6 +159,13 @@ def chrome_driver():
     chrome_options.add_argument("--use-fake-ui-for-media-stream")  # Auto-accept camera/mic permissions
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--no-sandbox")
+    # Enable verbose logging
+    chrome_options.add_argument("--enable-logging")
+    chrome_options.add_argument("--v=1")
+    # Log to a file
+    import os
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chrome_debug.log')
+    chrome_options.add_argument(f"--log-file={log_path}")
     # Headless mode can be problematic for WebRTC, but we'll try
     chrome_options.add_argument("--headless=new")  # New headless mode for Chrome
 
@@ -179,7 +186,17 @@ def firefox_driver():
     # Set up Firefox options
     firefox_options = FirefoxOptions()
     firefox_options.set_preference("media.navigator.permission.disabled", True)  # Auto-accept camera/mic permissions
-    firefox_options.add_argument("--headless")  # Headless mode for Firefox
+    FirefoxOptions.headless = True # Headless mode for Firefox
+    # firefox_options.add_argument("--width=1024")
+    # firefox_options.add_argument("--height=1024")
+
+    # enable logging
+    firefox_options.log.level = "trace"
+    firefox_options.add_argument("-devtools")
+
+    # Enable console logging
+    firefox_options.set_preference("devtools.console.stdout.content", True)
+    firefox_options.set_preference("browser.dom.window.dump.enabled", True)
 
     # Set up webdriver
     print("Starting Firefox browser")
