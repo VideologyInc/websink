@@ -63,7 +63,13 @@ graph LR
 Run the included test application:
 
 ```bash
-python3 ./test_webrtcwebsink.py
+python3 ./run_websink.py
+```
+
+Run pytest to test the plugin:
+
+```bash
+pytest
 ```
 
 Then open your web browser to http://localhost:8080 to view the test stream.

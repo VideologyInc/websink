@@ -219,7 +219,7 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         elif 'vpuenc_h264' in encoder_name:
             self.encoder.set_property('qp-max', 30)
             self.encoder.set_property('qp-min', 18)
-        
+
         if self.video_codec == 'h264':
             self.payloader.set_property('config-interval', -1)
             self.payloader.set_property('aggregate-mode', 'zero-latency')
@@ -229,7 +229,7 @@ class WebRTCWebSink(Gst.Bin, GObject.Object):
         elif self.video_codec == 'hevc':
             self.payloader.set_property('config-interval', -1)
             self.payloader.set_property('aggregate-mode', 'zero-latency')
-        
+
         # Create tee to split the stream for multiple clients
         self.tee = Gst.ElementFactory.make('tee', 'tee')
         if not self.tee:

@@ -40,3 +40,7 @@ coverage.xml
 # System files
 .DS_Store
 Thumbs.db
+
+# Test results and screenshots
+test_results/
+test/*.png

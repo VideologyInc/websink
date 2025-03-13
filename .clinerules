@@ -1,0 +1,124 @@
+# WebRTCWebSink GStreamer Plugin
+
+This file provides guidance for AI assistants working with this project.
+
+## Project Overview
+
+WebRTCWebSink is a GStreamer plugin that allows streaming directly to web browsers using WebRTC. It creates a complete streaming solution by combining:
+
+- A GStreamer bin element that handles WebRTC streaming
+- An HTTP server that serves the client webpage
+- A WebSocket server for WebRTC signaling
+- Client-side HTML/JS for receiving and displaying the stream
+
+## File Structure
+
+- `webrtcwebsink/` - Main package directory
+  - `__init__.py` - Package initialization
+  - `plugin.py` - GStreamer plugin implementation
+  - `http_server.py` - HTTP server for client webpage
+  - `signaling.py` - WebSocket server for WebRTC signaling
+  - `static/` - Client-side web files
+    - `index.html` - Main webpage
+    - `webrtc.js` - Client-side WebRTC implementation
+    - `adapter-latest.js` - WebRTC adapter library
+    - `favicon.ico` and `favicon.png` - Favicon files
+- `test/` - Test directory
+  - `selenium_test.py` - Selenium-based WebRTC tests
+- `run_websink.py` - Example script for running the plugin
+- `pyproject.toml` - Project metadata and dependencies
+- `README.md` - Project documentation
+- `.gitignore` - Git ignore rules
+
+## Development Workflow
+
+1. Install the package in development mode:
+   ```bash
+   pip install -e ".[dev]"
+   ```
+
+2. Make changes to the code
+
+3. Run tests to verify changes:
+   ```bash
+   pytest
+   ```
+
+4. Run the example script to manually test:
+   ```bash
+   python run_websink.py
+   ```
+
+## Testing Instructions
+
+### Automated Testing
+
+The project uses pytest and Selenium to test the WebRTC functionality. The tests verify that:
+1. The WebRTC stream is working correctly
+2. The video content is being displayed correctly
+
+#### Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run with detailed logging output
+pytest -s
+
+```
+
+### Manual Testing
+
+Run the included test application:
+
+```bash
+python run_websink.py
+```
+
+Then open your web browser to http://localhost:8080 to view the test stream.
+
+## Common Tasks
+
+### Adding a New Feature to the Plugin
+
+1. Modify `webrtcwebsink/plugin.py` to add the feature
+2. Update tests in `test/selenium_test.py` if necessary
+3. Run tests to verify the feature works
+4. Update documentation in `README.md`
+
+### Modifying the Web Interface
+
+1. Edit files in `webrtcwebsink/static/`
+2. Run the example script to test the changes
+3. Update tests if necessary
+
+### Updating Dependencies
+
+1. Edit `pyproject.toml` to add or update dependencies
+2. Reinstall the package in development mode
+
+## Troubleshooting
+
+### Common Issues
+
+1. **WebRTC connection fails**: Check that the STUN server is accessible and that the browser supports WebRTC.
+
+2. **Tests fail with "No such element" error**: The Selenium test might not be finding the video element. Check that the HTTP server is running and the page is loading correctly.
+
+3. **GStreamer plugin not found**: Make sure the plugin is registered correctly and that GStreamer can find it.
+
+### Debugging
+
+1. Enable GStreamer debug output:
+   ```python
+   import os
+   os.environ['GST_DEBUG'] = '3'
+   ```
+
+2. Run tests with verbose output:
+   ```bash
+   pytest -s
+   ```
+
+3. Check browser console for WebRTC errors
