@@ -1,0 +1,27 @@
+<!--
+  SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+  SPDX-License-Identifier: MIT
+-->
+
+<h3>WebRTC Connection</h3>
+<p>Connection should be established automatically. If not, you can use the manual method below.</p>
+
+<div class="session-info">
+  <h4>Browser Offer (sent automatically to server)</h4>
+  <textarea id="localSessionDescription" readonly="true"></textarea> <br />
+
+  <h4>Server Answer (received automatically)</h4>
+  <textarea id="remoteSessionDescription" readonly="true"></textarea> <br/>
+  <button onclick="window.startSession()">Manual Connect (only if automatic fails)</button><br />
+</div>
+
+<br />
+
+<h3>Video</h3>
+<div id="remoteVideos"></div> <br />
+
+<h3>Connection Logs</h3>
+<div id="div"></div>
+
+<!-- Include JavaScript -->
+<script src="demo.js"></script>
