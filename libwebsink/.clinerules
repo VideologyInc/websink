@@ -1,0 +1,50 @@
+# WebRTC WebSink Go Application
+
+This file provides guidance for AI assistants working with this project.
+
+## Project Overview
+
+WebRTC WebSink is a Go based gstreamer plugin built using go-gst and its helper cmd gst-plugin-gen. it:
+- gets h264 data from gstreamer pipeline
+- hosts an HTTP+js server that serves the client webpage
+- Sets up WebRTC signaling for establishing peer connections
+
+The application supports multiple simultaneous client connections, with each client receiving the same video stream.
+
+## File Structure
+
+- `websink.go` - Main Go application that turns into the c lib libwebsink
+- `static/` - Client-side web files
+  - `index.html` - Main webpage with minimal UI focused on video display
+  - `demo.js` - Client-side WebRTC implementation
+  - `adapter-latest.js` - WebRTC adapter library for browser compatibility
+
+## Common Tasks
+
+### setup to build go-gst plugins
+
+```bash
+go install github.com/go-gst/go-gst/cmd/gst-plugin-gen@latest
+```
+
+### Running the Application
+
+```bash
+# Generate bindings
+go generate
+# build gstreamer compatible plugin
+go build -o libwebsink.so -buildmode c-shared .
+```
+
+### Test the plugin
+
+```bash
+export GST_PLUGIN_PATH=$PWD:$GST_PLUGIN_PATH
+rm -rf ~/.cache/gstreamer-1.0/
+gst-inspect-1.0 websink
+```
+
+```bash
+# Run the application
+gst-launch-1.0 videotestsrc ! video/x-raw,format=I420 ! x264enc speed-preset=ultrafast tune=zerolatency key-int-max=20 ! video/x-h264,stream-format=byte-stream ! websink
+```
