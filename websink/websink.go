@@ -9,7 +9,6 @@ package main
 
 import (
 	"embed"
-	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -27,7 +26,12 @@ import (
 
 // SessionRequest represents the JSON structure for session requests
 type SessionRequest struct {
-	Offer string `json:"offer"`
+	Offer json.RawMessage `json:"offer"`
+}
+
+// SessionResponse represents the JSON structure for session responses
+type SessionResponse struct {
+	Answer json.RawMessage `json:"answer"`
 }
 
 // Global variables to store shared tracks
@@ -120,7 +124,10 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 
 	// Decode the offer
 	offer := webrtc.SessionDescription{}
-	decode(sessionReq.Offer, &offer)
+	if err := json.Unmarshal(sessionReq.Offer, &offer); err != nil {
+		http.Error(w, "Error parsing offer: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// Set the remote SessionDescription
 	if err := peerConnection.SetRemoteDescription(offer); err != nil {
@@ -145,11 +152,19 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
 	<-gatherComplete
 
+	// Marshal the answer to JSON
+	answerJSON, err := json.Marshal(peerConnection.LocalDescription())
+	if err != nil {
+		http.Error(w, "Error encoding answer: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	// Return the answer as JSON
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"answer": encode(peerConnection.LocalDescription()),
-	})
+	response := SessionResponse{
+		Answer: answerJSON,
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // createPeerConnection creates a new peer connection with the shared tracks
@@ -254,26 +269,4 @@ func pipelineForCodec(codecName string, tracks []*webrtc.TrackLocalStaticSample,
 			return gst.FlowOK
 		},
 	})
-}
-
-// JSON encode + base64 a SessionDescription
-func encode(obj *webrtc.SessionDescription) string {
-	b, err := json.Marshal(obj)
-	if err != nil {
-		panic(err)
-	}
-
-	return base64.StdEncoding.EncodeToString(b)
-}
-
-// Decode a base64 and unmarshal JSON into a SessionDescription
-func decode(in string, obj *webrtc.SessionDescription) {
-	b, err := base64.StdEncoding.DecodeString(in)
-	if err != nil {
-		panic(err)
-	}
-
-	if err = json.Unmarshal(b, obj); err != nil {
-		panic(err)
-	}
 }

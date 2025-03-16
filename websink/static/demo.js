@@ -17,6 +17,18 @@ pc.ontrack = function (event) {
   el.srcObject = event.streams[0]
   el.autoplay = true
   el.controls = true
+  el.playsInline = true  // Important for mobile devices
+
+  // Start muted to bypass browser autoplay restrictions
+  el.muted = true
+
+  // Add loadedmetadata event listener to ensure media is ready
+  el.addEventListener('loadedmetadata', function() {
+    // Ensure playback starts
+    el.play().catch(e => {
+      console.warn(`Autoplay failed: ${e.message}. User interaction may be required.`);
+    });
+  });
 
   document.getElementById('remoteVideos').appendChild(el)
 }
@@ -25,18 +37,21 @@ let iceTimout = null
 
 function sendOffer() {
   console.log('sending offer...')
-  const offerBase64 = btoa(JSON.stringify(pc.localDescription))
-  document.getElementById('localSessionDescription').value = offerBase64
+
+  // Display the offer in the textarea for reference
+  document.getElementById('localSessionDescription').value = JSON.stringify(pc.localDescription)
 
   console.log('ICE gathering complete, sending offer to server...')
 
-  // Send the offer to the server
+  // Send the offer to the server as JSON directly
   fetch('/api/session', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ offer: offerBase64 }),
+    body: JSON.stringify({
+      offer: pc.localDescription
+    }),
   })
   .then(response => {
     if (!response.ok) {
@@ -48,11 +63,10 @@ function sendOffer() {
     console.log('Received answer from server')
 
     // Set the remote description with the answer from the server
-    const answerSDP = JSON.parse(atob(data.answer))
-    pc.setRemoteDescription(answerSDP)
+    pc.setRemoteDescription(data.answer)
 
     // Display the answer in the textarea for reference
-    document.getElementById('remoteSessionDescription').value = data.answer
+    document.getElementById('remoteSessionDescription').value = JSON.stringify(data.answer)
 
     console.log('Connection established automatically')
   })
@@ -62,13 +76,26 @@ function sendOffer() {
   });
 }
 
-pc.oniceconnectionstatechange = e => console.log("ICE connection state changed: " + pc.iceConnectionState)
+pc.oniceconnectionstatechange = e => {
+  console.log("ICE connection state changed: " + pc.iceConnectionState)
+
+  // When connection is established, try to play all media elements
+  if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+    // Find all video and audio elements and try to play them
+    document.querySelectorAll('video, audio').forEach(el => {
+      el.play().catch(e => {
+        console.warn(`Autoplay failed: ${e.message}`);
+      });
+    });
+  }
+}
+
 pc.onicecandidate = event => {
   if (event.candidate === null) {
     // ICE gathering is complete, we can now send the offer to the server
     console.log('ICE gathering complete')
   } else {
-    console.log("New ICE candidate received: " + JSON.stringify(event.candidate))
+    console.log("New ICE candidate received")
     // fire after 150ms of no new candidates
     if (iceTimout) {
       clearTimeout(iceTimout)
@@ -77,13 +104,12 @@ pc.onicecandidate = event => {
   }
 }
 
-// Offer to receive 1 audio, and 2 video tracks
+// Offer to receive 1 audio, and 1 video track
 pc.addTransceiver('audio', {'direction': 'sendrecv'})
 pc.addTransceiver('video', {'direction': 'sendrecv'})
-// pc.addTransceiver('video', {'direction': 'sendrecv'})
 pc.createOffer()
    .then(offer => {
-       console.log("Offer created: ");
+       console.log("Offer created");
        return pc.setLocalDescription(offer);
    })
    .catch(error => {
@@ -98,7 +124,8 @@ window.startSession = () => {
   }
 
   try {
-    pc.setRemoteDescription(JSON.parse(atob(sd)))
+    // Parse the JSON directly
+    pc.setRemoteDescription(JSON.parse(sd))
     console.log('Connection established manually')
   } catch (e) {
     console.error(`Error: ${e.message}`);
