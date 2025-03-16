@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -311,7 +312,8 @@ func (w *WebSink) startHTTPServer(self *base.GstBaseSink) bool {
 	// Set up HTTP handlers
 	mux := http.NewServeMux()
 	// fileserver := http.FileServer(http.Dir("./static"))
-	fileserver := http.FileServer(http.FS(staticFiles))
+	static, _ := fs.Sub(staticFiles, "static")
+	fileserver := http.FileServer(http.FS(static))
 
 	mux.HandleFunc("POST /api/session", w.handleSession)
 	mux.Handle("GET /favicon.ico", fileserver)
@@ -327,7 +329,7 @@ func (w *WebSink) startHTTPServer(self *base.GstBaseSink) bool {
 	//get hostnames
 	hostname, _ := os.Hostname()
 	// get IP addr of main interface
-	addrs, _ := net.InterfaceAddrs()
+	addr := externalIP()
 	portStr := strconv.Itoa(port)
 
 	go func() {
@@ -336,7 +338,7 @@ func (w *WebSink) startHTTPServer(self *base.GstBaseSink) bool {
 		}
 	}()
 
-	fmt.Println(GREEN + "HTTP server started at " + hostname + ".local:" + portStr + " and " + addrs[0].String() + ":" + portStr + RESET)
+	fmt.Println(GREEN + "HTTP server started at http://" + hostname + ".local:" + portStr + " and http://" + addr + ":" + portStr + RESET)
 	return true
 }
 
@@ -541,4 +543,41 @@ func (w *WebSink) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowRet
 		return gst.FlowError
 	}
 	return gst.FlowOK
+}
+
+func externalIP() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "localhost"
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue // interface down
+		}
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue // loopback interface
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			return "localhost"
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+			ip = ip.To4()
+			if ip == nil {
+				continue // not an ipv4 address
+			}
+			return ip.String()
+		}
+	}
+	return "localhost"
 }

@@ -40,6 +40,7 @@ go build -o libwebsink.so -buildmode c-shared .
 
 ```bash
 export GST_PLUGIN_PATH=$PWD:$GST_PLUGIN_PATH
+export GST_DEBUG=websink:5
 rm -rf ~/.cache/gstreamer-1.0/
 gst-inspect-1.0 websink
 ```
