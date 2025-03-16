@@ -81,16 +81,13 @@ func main() {
 
 	// Set up HTTP handlers
 	m := http.NewServeMux()
-	fileserver := http.FileServer(http.FS(static_files))
-	m.Handle("GET /static/", fileserver)
+	// fileserver := http.FileServer(http.FS(static_files))
+	fileserver := http.FileServer(http.Dir("./static"))
+
+	m.HandleFunc("POST /api/session", handleSession(peerConnection))
+	// m.Handle("GET /static/", fileserver)
 	m.Handle("GET /favicon.ico", fileserver)
-	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "static/index.html")
-	})
-	m.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "static/favicon.ico")
-	})
-	m.HandleFunc("/api/session", handleSession(peerConnection))
+	m.Handle("GET /", fileserver)
 
 	println("Server started at http://localhost:8082")
 
