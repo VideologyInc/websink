@@ -1,0 +1,125 @@
+# WebRTC WebSink Go Application
+
+This file provides guidance for AI assistants working with this project.
+
+## Project Overview
+
+WebRTC WebSink is a Go application that streams video to web browsers using WebRTC. It creates a complete streaming solution by combining:
+
+- A GStreamer pipeline that generates video content
+- An HTTP server that serves the client webpage
+- WebRTC signaling for establishing peer connections
+- Client-side HTML/JS for receiving and displaying the stream
+
+The application supports multiple simultaneous client connections, with each client receiving the same video stream.
+
+## File Structure
+
+- `websink.go` - Main Go application that handles WebRTC and HTTP server
+- `static/` - Client-side web files
+  - `index.html` - Main webpage with minimal UI focused on video display
+  - `demo.js` - Client-side WebRTC implementation
+  - `adapter-latest.js` - WebRTC adapter library for browser compatibility
+
+## Key Components
+
+### Server-Side (Go)
+
+1. **GStreamer Integration**
+   - Uses go-gst bindings to create video pipelines
+   - Supports different codecs (h264, vp8, vp9)
+   - Captures frames from GStreamer and sends them to WebRTC tracks
+
+2. **WebRTC Handling**
+   - Creates and manages peer connections for each client
+   - Handles ICE candidates and signaling
+   - Shares a single video track across all connections
+
+3. **HTTP Server**
+   - Serves static files for the web client
+   - Provides API endpoint for WebRTC signaling
+   - Automatically finds an available port if the default is in use
+
+4. **Connection Management**
+   - Tracks active connections in a thread-safe map
+   - Displays connection count in the console
+   - Cleans up resources when clients disconnect
+
+### Client-Side (JavaScript)
+
+1. **WebRTC Connection**
+   - Establishes connection with the server
+   - Handles ICE candidates and signaling
+   - Displays video stream in full-screen UI
+
+2. **Disconnect Handling**
+   - Gracefully closes connections when the page is unloaded
+   - Uses beforeunload and visibilitychange events
+   - Helps server detect disconnections more quickly
+
+## Common Tasks
+
+### Running the Application
+
+```bash
+# Build the application
+cd websink
+go build
+
+# Run the application
+./websink
+```
+
+### Command-Line Options
+
+- `--video-src` - Specify the GStreamer video source (default: videotestsrc)
+- `--port` - Specify the HTTP server port (default: 8082)
+
+### Modifying the Video Source
+
+To change the video source, modify the `--video-src` parameter. Examples:
+
+```bash
+# Use a test source
+./websink --video-src="videotestsrc"
+
+# Use a video file
+./websink --video-src="filesrc location=video.mp4 ! decodebin"
+
+# Use a webcam
+./websink --video-src="v4l2src ! videoconvert"
+```
+
+### Adding Features
+
+1. **Adding Audio Support**
+   - Uncomment the audio track creation in websink.go
+   - Update the client-side code to handle audio tracks
+   - Add appropriate GStreamer pipeline for audio
+
+2. **Changing Video Quality**
+   - Modify the encoder parameters in the pipelineForCodec function
+   - Adjust key-int-max, speed-preset, and other parameters
+
+3. **Adding UI Controls**
+   - Modify index.html to add UI elements
+   - Update demo.js to handle user interactions
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Connection Failures**
+   - Check that the STUN server is accessible
+   - Verify that the browser supports WebRTC
+   - Check for network issues or firewalls
+
+2. **Video Not Displaying**
+   - Check browser console for errors
+   - Verify that the GStreamer pipeline is working
+   - Check that the video codec is supported by the browser
+
+3. **Performance Issues**
+   - Adjust video resolution and bitrate
+   - Consider using hardware acceleration for encoding
+   - Check system resource usage

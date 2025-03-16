@@ -40,8 +40,7 @@ var (
 	// Mutex to protect access to the tracks
 	tracksMutex sync.RWMutex
 
-	// Shared tracks that will be sent to all clients
-	audioTrack *webrtc.TrackLocalStaticSample
+	// Shared video track
 	videoTrack *webrtc.TrackLocalStaticSample
 
 	// WebRTC configuration
@@ -89,7 +88,6 @@ func findAvailablePort(startPort int) (int, error) {
 }
 
 func main() {
-	audioSrc := flag.String("audio-src", "audiotestsrc", "GStreamer audio src")
 	videoSrc := flag.String("video-src", "videotestsrc", "GStreamer video src")
 	defaultPort := flag.Int("port", 8082, "HTTP server port")
 	flag.Parse()
@@ -103,21 +101,14 @@ func main() {
 	// Initialize the peer connections map
 	peerConnections = make(map[string]*webrtc.PeerConnection)
 
-	// Create shared audio track
-	var err error
-	audioTrack, err = webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "pion1")
-	if err != nil {
-		panic(err)
-	}
-
 	// Create shared video track
+	var err error
 	videoTrack, err = webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: "video/h264"}, "video", "pion2")
 	if err != nil {
 		panic(err)
 	}
 
-	// Start pushing buffers on these tracks
-	go pipelineForCodec("opus", []*webrtc.TrackLocalStaticSample{audioTrack}, *audioSrc)
+	// Start pushing buffers on the video track
 	go pipelineForCodec("h264", []*webrtc.TrackLocalStaticSample{videoTrack}, *videoSrc)
 
 	// Set up HTTP handlers
@@ -265,12 +256,6 @@ func createPeerConnection(peerID string) (*webrtc.PeerConnection, error) {
 	tracksMutex.RLock()
 	defer tracksMutex.RUnlock()
 
-	// Add the audio track to the peer connection
-	_, err = peerConnection.AddTrack(audioTrack)
-	if err != nil {
-		return nil, err
-	}
-
 	// Add the video track to the peer connection
 	_, err = peerConnection.AddTrack(videoTrack)
 	if err != nil {
@@ -290,13 +275,6 @@ func pipelineForCodec(codecName string, tracks []*webrtc.TrackLocalStaticSample,
 		pipelineStr = pipelineSrc + " ! vp9enc ! " + pipelineStr
 	case "h264":
 		pipelineStr = pipelineSrc + " ! video/x-raw,format=I420 ! x264enc speed-preset=ultrafast tune=zerolatency key-int-max=20 ! video/x-h264,stream-format=byte-stream ! " + pipelineStr
-	case "opus":
-		// pipelineStr = pipelineSrc + " ! avenc_opus ! " + pipelineStr
-		pipelineStr = pipelineSrc + " ! opusenc ! " + pipelineStr
-	case "pcmu":
-		pipelineStr = pipelineSrc + " ! audio/x-raw, rate=8000 ! mulawenc ! " + pipelineStr
-	case "pcma":
-		pipelineStr = pipelineSrc + " ! audio/x-raw, rate=8000 ! alawenc ! " + pipelineStr
 	default:
 		panic("Unhandled codec " + codecName) //nolint
 	}

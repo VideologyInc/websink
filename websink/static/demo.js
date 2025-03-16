@@ -11,37 +11,39 @@ let pc = new RTCPeerConnection({
   ]
 })
 
+// Update connection status display
+function updateConnectionStatus(status) {
+  const statusElement = document.getElementById('connectionStatus');
+  statusElement.textContent = status;
+}
+
 pc.ontrack = function (event) {
-  console.log("New track received: " + event.track.kind)
-  var el = document.createElement(event.track.kind)
-  el.srcObject = event.streams[0]
-  el.autoplay = true
-  el.controls = true
-  el.playsInline = true  // Important for mobile devices
+  if (event.track.kind === 'video') {
+    var videoElement = document.createElement('video');
+    videoElement.srcObject = event.streams[0];
+    videoElement.autoplay = true;
+    videoElement.playsInline = true;
+    videoElement.muted = true;
 
-  // Start muted to bypass browser autoplay restrictions
-  el.muted = true
-
-  // Add loadedmetadata event listener to ensure media is ready
-  el.addEventListener('loadedmetadata', function() {
-    // Ensure playback starts
-    el.play().catch(e => {
-      console.warn(`Autoplay failed: ${e.message}. User interaction may be required.`);
+    // Add loadedmetadata event listener to ensure video is ready
+    videoElement.addEventListener('loadedmetadata', function() {
+      // Ensure playback starts
+      videoElement.play().catch(e => {
+        console.warn(`Autoplay failed: ${e.message}. User interaction may be required.`);
+      });
     });
-  });
 
-  document.getElementById('remoteVideos').appendChild(el)
+    // Clear any existing video elements
+    const videoContainer = document.getElementById('videoContainer');
+    videoContainer.innerHTML = '';
+    videoContainer.appendChild(videoElement);
+  }
 }
 
 let iceTimout = null
 
 function sendOffer() {
-  console.log('sending offer...')
-
-  // Display the offer in the textarea for reference
-  document.getElementById('localSessionDescription').value = JSON.stringify(pc.localDescription)
-
-  console.log('ICE gathering complete, sending offer to server...')
+  updateConnectionStatus('Sending offer...');
 
   // Send the offer to the server as JSON directly
   fetch('/api/session', {
@@ -60,42 +62,54 @@ function sendOffer() {
     return response.json()
   })
   .then(data => {
-    console.log('Received answer from server')
+    updateConnectionStatus('Received answer');
 
     // Set the remote description with the answer from the server
-    pc.setRemoteDescription(data.answer)
-
-    // Display the answer in the textarea for reference
-    document.getElementById('remoteSessionDescription').value = JSON.stringify(data.answer)
-
-    console.log('Connection established automatically')
+    pc.setRemoteDescription(data.answer);
   })
   .catch(error => {
+    updateConnectionStatus('Connection failed');
     console.error(`Error: ${error.message}`);
-    alert(`Failed to establish connection: ${error.message}`);
   });
 }
 
-pc.oniceconnectionstatechange = e => {
-  console.log("ICE connection state changed: " + pc.iceConnectionState)
+// Function to close the connection gracefully
+function closeConnection() {
+  updateConnectionStatus('Closing connection...');
 
-  // When connection is established, try to play all media elements
-  if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-    // Find all video and audio elements and try to play them
-    document.querySelectorAll('video, audio').forEach(el => {
+  // Close the RTCPeerConnection
+  // This will send the appropriate signals to the server
+  if (pc && pc.connectionState !== 'closed') {
+    // Close the peer connection
+    pc.close();
+
+    updateConnectionStatus('Connection closed');
+  }
+}
+
+pc.oniceconnectionstatechange = e => {
+  const state = pc.iceConnectionState;
+  updateConnectionStatus(`Connection: ${state}`);
+
+  // When connection is established, try to play all video elements
+  if (state === 'connected' || state === 'completed') {
+    updateConnectionStatus('Connected');
+    // Find all video elements and try to play them
+    document.querySelectorAll('video').forEach(el => {
       el.play().catch(e => {
         console.warn(`Autoplay failed: ${e.message}`);
       });
     });
+  } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+    updateConnectionStatus('Disconnected');
   }
 }
 
 pc.onicecandidate = event => {
   if (event.candidate === null) {
     // ICE gathering is complete, we can now send the offer to the server
-    console.log('ICE gathering complete')
+    updateConnectionStatus('ICE gathering complete');
   } else {
-    console.log("New ICE candidate received")
     // fire after 150ms of no new candidates
     if (iceTimout) {
       clearTimeout(iceTimout)
@@ -104,30 +118,31 @@ pc.onicecandidate = event => {
   }
 }
 
-// Offer to receive 1 audio, and 1 video track
-pc.addTransceiver('audio', {'direction': 'sendrecv'})
+// Initialize connection
+updateConnectionStatus('Starting connection...');
+
+// Offer to receive video track only
 pc.addTransceiver('video', {'direction': 'sendrecv'})
 pc.createOffer()
    .then(offer => {
-       console.log("Offer created");
+       updateConnectionStatus('Offer created');
        return pc.setLocalDescription(offer);
    })
    .catch(error => {
+       updateConnectionStatus('Error creating offer');
        console.error(`Error: ${error.message}`);
    });
 
-// Keep the startSession function for manual fallback
-window.startSession = () => {
-  let sd = document.getElementById('remoteSessionDescription').value
-  if (sd === '') {
-    return alert('Session Description must not be empty')
-  }
+// Add event listener for page unload
+window.addEventListener('beforeunload', function(event) {
+  closeConnection();
+});
 
-  try {
-    // Parse the JSON directly
-    pc.setRemoteDescription(JSON.parse(sd))
-    console.log('Connection established manually')
-  } catch (e) {
-    console.error(`Error: ${e.message}`);
+// Add event listener for page visibility change
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'hidden') {
+    // Page is hidden (tab switched, minimized, etc.)
+    // This can help in some cases where beforeunload doesn't fire
+    closeConnection();
   }
-}
+});
