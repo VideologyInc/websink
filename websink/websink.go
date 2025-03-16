@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/go-gst/go-gst/gst/app"
@@ -29,6 +30,19 @@ type SessionRequest struct {
 	Offer string `json:"offer"`
 }
 
+// Global variables to store shared tracks
+var (
+	// Mutex to protect access to the tracks
+	tracksMutex sync.RWMutex
+
+	// Shared tracks that will be sent to all clients
+	audioTrack *webrtc.TrackLocalStaticSample
+	videoTrack *webrtc.TrackLocalStaticSample
+
+	// WebRTC configuration
+	webrtcConfig webrtc.Configuration
+)
+
 //go:embed static/*
 var static_files embed.FS
 
@@ -41,55 +55,35 @@ func main() {
 	gst.Init(nil)
 
 	// Prepare the configuration
-	config := webrtc.Configuration{}
+	webrtcConfig = webrtc.Configuration{}
 
-	// Create a new RTCPeerConnection
-	peerConnection, err := webrtc.NewPeerConnection(config)
+	// Create shared audio track
+	var err error
+	audioTrack, err = webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "pion1")
 	if err != nil {
 		panic(err)
 	}
 
-	// Set the handler for ICE connection state
-	// This will notify you when the peer has connected/disconnected
-	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		fmt.Printf("Connection State has changed %s \n", connectionState.String())
-	})
-
-	// Create a audio track
-	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "audio", "pion1")
-	if err != nil {
-		panic(err)
-	}
-	_, err = peerConnection.AddTrack(audioTrack)
-	if err != nil {
-		panic(err)
-	}
-
-	// Create a video track
-	firstVideoTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: "video/h264"}, "video", "pion2")
-	if err != nil {
-		panic(err)
-	}
-	_, err = peerConnection.AddTrack(firstVideoTrack)
+	// Create shared video track
+	videoTrack, err = webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: "video/h264"}, "video", "pion2")
 	if err != nil {
 		panic(err)
 	}
 
 	// Start pushing buffers on these tracks
 	go pipelineForCodec("opus", []*webrtc.TrackLocalStaticSample{audioTrack}, *audioSrc)
-	go pipelineForCodec("h264", []*webrtc.TrackLocalStaticSample{firstVideoTrack}, *videoSrc)
+	go pipelineForCodec("h264", []*webrtc.TrackLocalStaticSample{videoTrack}, *videoSrc)
 
 	// Set up HTTP handlers
 	m := http.NewServeMux()
-	// fileserver := http.FileServer(http.FS(static_files))
 	fileserver := http.FileServer(http.Dir("./static"))
 
-	m.HandleFunc("POST /api/session", handleSession(peerConnection))
-	// m.Handle("GET /static/", fileserver)
+	m.HandleFunc("POST /api/session", handleSession)
 	m.Handle("GET /favicon.ico", fileserver)
 	m.Handle("GET /", fileserver)
 
 	println("Server started at http://localhost:8082")
+	println("Multiple client connections are now supported")
 
 	http.ListenAndServe(":8082", m)
 	// Block forever
@@ -97,60 +91,107 @@ func main() {
 }
 
 // handleSession creates a handler for the /api/session endpoint
-func handleSession(peerConnection *webrtc.PeerConnection) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Read the request body
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "Error reading request body", http.StatusBadRequest)
-			return
-		}
-
-		// Parse the JSON request
-		var sessionReq SessionRequest
-		if err := json.Unmarshal(body, &sessionReq); err != nil {
-			http.Error(w, "Error parsing JSON", http.StatusBadRequest)
-			return
-		}
-
-		// Decode the offer
-		offer := webrtc.SessionDescription{}
-		decode(sessionReq.Offer, &offer)
-
-		// Set the remote SessionDescription
-		if err := peerConnection.SetRemoteDescription(offer); err != nil {
-			http.Error(w, "Error setting remote description: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Create an answer
-		answer, err := peerConnection.CreateAnswer(nil)
-		if err != nil {
-			http.Error(w, "Error creating answer: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Sets the LocalDescription, and starts our UDP listeners
-		if err = peerConnection.SetLocalDescription(answer); err != nil {
-			http.Error(w, "Error setting local description: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Wait for ICE gathering to complete
-		gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
-		<-gatherComplete
-
-		// Return the answer as JSON
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"answer": encode(peerConnection.LocalDescription()),
-		})
+func handleSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
+
+	// Read the request body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Error reading request body", http.StatusBadRequest)
+		return
+	}
+
+	// Parse the JSON request
+	var sessionReq SessionRequest
+	if err := json.Unmarshal(body, &sessionReq); err != nil {
+		http.Error(w, "Error parsing JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Create a new peer connection for this client
+	peerConnection, err := createPeerConnection()
+	if err != nil {
+		http.Error(w, "Error creating peer connection: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Decode the offer
+	offer := webrtc.SessionDescription{}
+	decode(sessionReq.Offer, &offer)
+
+	// Set the remote SessionDescription
+	if err := peerConnection.SetRemoteDescription(offer); err != nil {
+		http.Error(w, "Error setting remote description: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Create an answer
+	answer, err := peerConnection.CreateAnswer(nil)
+	if err != nil {
+		http.Error(w, "Error creating answer: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Sets the LocalDescription, and starts our UDP listeners
+	if err = peerConnection.SetLocalDescription(answer); err != nil {
+		http.Error(w, "Error setting local description: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Wait for ICE gathering to complete
+	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
+	<-gatherComplete
+
+	// Return the answer as JSON
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"answer": encode(peerConnection.LocalDescription()),
+	})
+}
+
+// createPeerConnection creates a new peer connection with the shared tracks
+func createPeerConnection() (*webrtc.PeerConnection, error) {
+	// Create a new RTCPeerConnection
+	peerConnection, err := webrtc.NewPeerConnection(webrtcConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Set the handler for ICE connection state
+	// This will notify you when the peer has connected/disconnected
+	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
+		fmt.Printf("Connection State has changed to %s\n", connectionState.String())
+
+		// Clean up when disconnected
+		if connectionState == webrtc.ICEConnectionStateDisconnected ||
+			connectionState == webrtc.ICEConnectionStateFailed ||
+			connectionState == webrtc.ICEConnectionStateClosed {
+			fmt.Println("Peer disconnected, cleaning up")
+			// Close the peer connection to free resources
+			peerConnection.Close()
+		}
+	})
+
+	// Lock to safely access the shared tracks
+	tracksMutex.RLock()
+	defer tracksMutex.RUnlock()
+
+	// Add the audio track to the peer connection
+	_, err = peerConnection.AddTrack(audioTrack)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add the video track to the peer connection
+	_, err = peerConnection.AddTrack(videoTrack)
+	if err != nil {
+		return nil, err
+	}
+
+	return peerConnection, nil
 }
 
 // Create the appropriate GStreamer pipeline depending on what codec we are working with
@@ -205,7 +246,8 @@ func pipelineForCodec(codecName string, tracks []*webrtc.TrackLocalStaticSample,
 
 			for _, t := range tracks {
 				if err := t.WriteSample(media.Sample{Data: samples, Duration: *buffer.Duration().AsDuration()}); err != nil {
-					panic(err) //nolint
+					fmt.Printf("Error writing sample to track: %v\n", err)
+					// Don't panic here, just log the error and continue
 				}
 			}
 
@@ -213,26 +255,6 @@ func pipelineForCodec(codecName string, tracks []*webrtc.TrackLocalStaticSample,
 		},
 	})
 }
-
-// Read from stdin until we get a newline
-// func readUntilNewline() (in string) {
-// 	var err error
-
-// 	r := bufio.NewReader(os.Stdin)
-// 	for {
-// 		in, err = r.ReadString('\n')
-// 		if err != nil && !errors.Is(err, io.EOF) {
-// 			panic(err)
-// 		}
-
-// 		if in = strings.TrimSpace(in); len(in) > 0 {
-// 			break
-// 		}
-// 	}
-
-// 	fmt.Println("")
-// 	return
-// }
 
 // JSON encode + base64 a SessionDescription
 func encode(obj *webrtc.SessionDescription) string {
