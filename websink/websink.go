@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 
@@ -45,14 +46,52 @@ var (
 
 	// WebRTC configuration
 	webrtcConfig webrtc.Configuration
+
+	// Map to store active peer connections
+	peerConnectionsMutex sync.RWMutex
+	peerConnections      map[string]*webrtc.PeerConnection
 )
 
 //go:embed static/*
 var static_files embed.FS
 
+// updatePeerConnections adds or removes a peer connection from the global map
+// and prints the current count
+func updatePeerConnections(id string, pc *webrtc.PeerConnection, add bool) {
+	peerConnectionsMutex.Lock()
+	defer peerConnectionsMutex.Unlock()
+
+	if add {
+		peerConnections[id] = pc
+	} else {
+		delete(peerConnections, id)
+	}
+
+	fmt.Printf("Client count changed: %d connected clients\n", len(peerConnections))
+}
+
+// findAvailablePort finds an available port starting from the given port
+func findAvailablePort(startPort int) (int, error) {
+	port := startPort
+	maxPort := startPort + 100 // Try up to 100 ports
+
+	for port < maxPort {
+		addr := fmt.Sprintf(":%d", port)
+		listener, err := net.Listen("tcp", addr)
+		if err == nil {
+			listener.Close()
+			return port, nil
+		}
+		port++
+	}
+
+	return 0, fmt.Errorf("no available ports found between %d and %d", startPort, maxPort)
+}
+
 func main() {
 	audioSrc := flag.String("audio-src", "audiotestsrc", "GStreamer audio src")
 	videoSrc := flag.String("video-src", "videotestsrc", "GStreamer video src")
+	defaultPort := flag.Int("port", 8082, "HTTP server port")
 	flag.Parse()
 
 	// Initialize GStreamer
@@ -60,6 +99,9 @@ func main() {
 
 	// Prepare the configuration
 	webrtcConfig = webrtc.Configuration{}
+
+	// Initialize the peer connections map
+	peerConnections = make(map[string]*webrtc.PeerConnection)
 
 	// Create shared audio track
 	var err error
@@ -86,10 +128,21 @@ func main() {
 	m.Handle("GET /favicon.ico", fileserver)
 	m.Handle("GET /", fileserver)
 
-	println("Server started at http://localhost:8082")
-	println("Multiple client connections are now supported")
+	// Find an available port
+	port, err := findAvailablePort(*defaultPort)
+	if err != nil {
+		panic(err)
+	}
 
-	http.ListenAndServe(":8082", m)
+	// Print initial client count
+	fmt.Printf("Client count: %d connected clients\n", len(peerConnections))
+
+	// Start the HTTP server
+	serverAddr := fmt.Sprintf(":%d", port)
+	fmt.Printf("Server started at http://localhost:%d\n", port)
+	fmt.Println("Multiple client connections are now supported")
+
+	http.ListenAndServe(serverAddr, m)
 	// Block forever
 	select {}
 }
@@ -115,23 +168,33 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate a unique ID for this peer connection
+	peerID := fmt.Sprintf("peer-%d", len(peerConnections)+1)
+
 	// Create a new peer connection for this client
-	peerConnection, err := createPeerConnection()
+	peerConnection, err := createPeerConnection(peerID)
 	if err != nil {
 		http.Error(w, "Error creating peer connection: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	// Add to the peer connections map
+	updatePeerConnections(peerID, peerConnection, true)
+
 	// Decode the offer
 	offer := webrtc.SessionDescription{}
 	if err := json.Unmarshal(sessionReq.Offer, &offer); err != nil {
 		http.Error(w, "Error parsing offer: "+err.Error(), http.StatusBadRequest)
+		// Remove from peer connections map if we fail
+		updatePeerConnections(peerID, nil, false)
 		return
 	}
 
 	// Set the remote SessionDescription
 	if err := peerConnection.SetRemoteDescription(offer); err != nil {
 		http.Error(w, "Error setting remote description: "+err.Error(), http.StatusInternalServerError)
+		// Remove from peer connections map if we fail
+		updatePeerConnections(peerID, nil, false)
 		return
 	}
 
@@ -139,12 +202,16 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 	answer, err := peerConnection.CreateAnswer(nil)
 	if err != nil {
 		http.Error(w, "Error creating answer: "+err.Error(), http.StatusInternalServerError)
+		// Remove from peer connections map if we fail
+		updatePeerConnections(peerID, nil, false)
 		return
 	}
 
 	// Sets the LocalDescription, and starts our UDP listeners
 	if err = peerConnection.SetLocalDescription(answer); err != nil {
 		http.Error(w, "Error setting local description: "+err.Error(), http.StatusInternalServerError)
+		// Remove from peer connections map if we fail
+		updatePeerConnections(peerID, nil, false)
 		return
 	}
 
@@ -156,6 +223,8 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 	answerJSON, err := json.Marshal(peerConnection.LocalDescription())
 	if err != nil {
 		http.Error(w, "Error encoding answer: "+err.Error(), http.StatusInternalServerError)
+		// Remove from peer connections map if we fail
+		updatePeerConnections(peerID, nil, false)
 		return
 	}
 
@@ -168,7 +237,7 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // createPeerConnection creates a new peer connection with the shared tracks
-func createPeerConnection() (*webrtc.PeerConnection, error) {
+func createPeerConnection(peerID string) (*webrtc.PeerConnection, error) {
 	// Create a new RTCPeerConnection
 	peerConnection, err := webrtc.NewPeerConnection(webrtcConfig)
 	if err != nil {
@@ -178,13 +247,15 @@ func createPeerConnection() (*webrtc.PeerConnection, error) {
 	// Set the handler for ICE connection state
 	// This will notify you when the peer has connected/disconnected
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		fmt.Printf("Connection State has changed to %s\n", connectionState.String())
+		fmt.Printf("Connection State for %s has changed to %s\n", peerID, connectionState.String())
 
 		// Clean up when disconnected
 		if connectionState == webrtc.ICEConnectionStateDisconnected ||
 			connectionState == webrtc.ICEConnectionStateFailed ||
 			connectionState == webrtc.ICEConnectionStateClosed {
-			fmt.Println("Peer disconnected, cleaning up")
+			fmt.Printf("Peer %s disconnected, cleaning up\n", peerID)
+			// Remove from peer connections map
+			updatePeerConnections(peerID, nil, false)
 			// Close the peer connection to free resources
 			peerConnection.Close()
 		}
