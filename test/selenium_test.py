@@ -13,52 +13,23 @@ from selenium.webdriver.support import expected_conditions as EC
 import cv2
 import numpy as np
 
+# set gstremer plugin path for this dir and parent dir
+os.environ["GST_PLUGIN_PATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# clear gstreamer registry cache
+os.system("rm -rf ~/.cache/gstreamer-1.0/")
+
 # Set up GStreamer
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst, GLib, GObject
 Gst.init(None)
 
-# Import webrtcwebsink and register the plugin
-import webrtcwebsink
-
-def plugin_init(plugin):
-    """Initialize the GStreamer plugin."""
-    return Gst.Element.register(plugin, "webrtcwebsink", Gst.Rank.NONE, webrtcwebsink.WebRTCWebSink)
-
-def register_plugin():
-    """Register the webrtcwebsink plugin with GStreamer."""
-    try:
-        # Register the plugin
-        if not Gst.Plugin.register_static(
-            Gst.VERSION_MAJOR,
-            Gst.VERSION_MINOR,
-            "webrtcwebsink",
-            "WebRTC Web Sink",
-            plugin_init,
-            "",
-            "",
-            "webrtcwebsink",
-            "webrtcwebsink",
-            ""
-        ):
-            print("Failed to register webrtcwebsink plugin")
-            return False
-        print("Successfully registered webrtcwebsink plugin")
-        return True
-    except Exception as e:
-        print(f"Error registering webrtcwebsink plugin: {e}")
-        return False
-
-# Register the plugin
-register_plugin()
-
 # Verify plugin registration
 registry = Gst.Registry.get()
-factory = registry.find_feature("webrtcwebsink", Gst.ElementFactory)
+factory = registry.find_feature("websink", Gst.ElementFactory)
 if not factory:
-    print("webrtcwebsink element not found in registry!")
+    print("websink element not found in registry!")
 else:
-    print("Found webrtcwebsink element in registry")
+    print("Found websink element in registry")
 
 # Global variables for pipeline and loop
 pipeline = None
@@ -66,15 +37,12 @@ loop = None
 pipeline_thread = None
 
 def start_pipeline():
-    """Start the GStreamer pipeline with WebRTCWebSink."""
+    """Start the GStreamer pipeline with websink."""
     global pipeline, loop
     try:
         # Create the pipeline
         pipeline_str = '''
-            videotestsrc is-live=true !
-            video/x-raw,width=640,height=480,framerate=30/1 !
-            videoconvert !
-            webrtcwebsink name=sink port=8098 ws-port=8099
+            videotestsrc is-live=true ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! x264enc tune=zerolatency ! websink is-live=true name=wsink
         '''
         print("\nStarting GStreamer pipeline:")
         print(f"Pipeline string: {pipeline_str}")
@@ -213,7 +181,7 @@ def test_webrtc_stream(gstreamer_pipeline, chrome_driver):
     """Test that the WebRTC stream is working correctly."""
     try:
         # Navigate to the WebRTC page
-        url = "http://localhost:8098"
+        url = "http://localhost:8091"
         print(f"Navigating to {url}")
         chrome_driver.get(url)
 
@@ -245,12 +213,12 @@ def test_webrtc_stream(gstreamer_pipeline, chrome_driver):
         chrome_driver.save_screenshot(video_screenshot_path)
         print(f"Video screenshot saved to {video_screenshot_path}")
 
-        # Verify the WebRTC connection status using JavaScript
-        connection_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.connectionState : 'undefined'")
-        ice_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.iceConnectionState : 'undefined'")
-        assert connection_state is not None, "Connection state is None"
-        assert ice_state is not None, "ICE state is None"
-        print(f"WebRTC connection state: {connection_state}, ICE state: {ice_state}")
+        # # Verify the WebRTC connection status using JavaScript
+        # connection_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.connectionState : 'undefined'")
+        # ice_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.iceConnectionState : 'undefined'")
+        # assert connection_state is not None, "Connection state is None"
+        # assert ice_state is not None, "ICE state is None"
+        # print(f"WebRTC connection state: {connection_state}, ICE state: {ice_state}")
 
         # Check if video has valid dimensions
         assert size['width'] > 0, "Video width should be greater than 0"
@@ -276,7 +244,7 @@ def test_image_comparison(gstreamer_pipeline, chrome_driver):
     """
     try:
         # Navigate to the WebRTC page
-        url = "http://localhost:8098"
+        url = "http://localhost:8091"
         print(f"Navigating to {url}")
         chrome_driver.get(url)
 
@@ -289,12 +257,12 @@ def test_image_comparison(gstreamer_pipeline, chrome_driver):
         print("Waiting for WebRTC connection to establish")
         time.sleep(1)
 
-        # Verify the WebRTC connection status using JavaScript
-        connection_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.connectionState : 'undefined'")
-        ice_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.iceConnectionState : 'undefined'")
-        # assert connection_state is not None, "Connection state is None"
-        # assert ice_state is not None, "ICE state is None"
-        print(f"WebRTC connection state: {connection_state}, ICE state: {ice_state}")
+        # # Verify the WebRTC connection status using JavaScript
+        # connection_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.connectionState : 'undefined'")
+        # ice_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.iceConnectionState : 'undefined'")
+        # # assert connection_state is not None, "Connection state is None"
+        # # assert ice_state is not None, "ICE state is None"
+        # print(f"WebRTC connection state: {connection_state}, ICE state: {ice_state}")
 
         # Capture a new screenshot for comparison
         print("Taking new screenshot for comparison")
@@ -356,7 +324,7 @@ def test_image_comparison_firefox(gstreamer_pipeline, firefox_driver):
     """
     try:
         # Navigate to the WebRTC page
-        url = "http://localhost:8098"
+        url = "http://localhost:8091"
         print(f"Navigating to {url} with Firefox")
         firefox_driver.get(url)
 

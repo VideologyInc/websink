@@ -47,3 +47,4 @@ test/*.png
 
 *.so
 zzgenerated*
+*.h
