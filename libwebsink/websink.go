@@ -16,7 +16,7 @@
 // +plugin:Source=websink
 // +plugin:Package=websink
 // +plugin:Origin=https://github.com/videologyinc/websink
-// +plugin:ReleaseDate=2025-03-16
+// +plugin:ReleaseDate=2025-03-18
 //
 // +element:Name=websink
 // +element:Rank=gst.RankNone
@@ -48,7 +48,7 @@ import (
 
 // defaults:
 var (
-	DefaultPort       = 8082
+	DefaultPort       = 8091
 	DefaultStunServer = "stun:stun.l.google.com:19302"
 	// print colors
 	GREEN = "\033[32m"
@@ -89,6 +89,11 @@ var properties = []*glib.ParamSpec{
 		&DefaultStunServer,
 		glib.ParameterReadWrite,
 	),
+	glib.NewBoolParam(
+		"is-live", "Live Mode", "Whether to block Render without peers (default: false)",
+		false,
+		glib.ParameterReadWrite,
+	),
 }
 
 // Here we declare a private struct to hold our internal state.
@@ -104,6 +109,8 @@ type state struct {
 	// Map to store active peer connections
 	peerConnectionsMutex sync.RWMutex
 	peerConnections      map[string]*webrtc.PeerConnection
+	// Channel to notify about peer connection changes
+	unblock chan int
 	// Shared video track
 	videoTrack *webrtc.TrackLocalStaticSample
 	// Buffer for H264 data
@@ -116,6 +123,8 @@ type state struct {
 type settings struct {
 	port       int
 	stunServer string
+	isLive     bool
+	unlock     bool
 }
 
 //go:embed static/*
@@ -141,7 +150,13 @@ func (w *WebSink) updatePeerConnections(id string, pc *webrtc.PeerConnection, ad
 		delete(w.state.peerConnections, id)
 	}
 
-	CAT.Log(gst.LevelInfo, fmt.Sprintf("Client count changed: %d connected clients", len(w.state.peerConnections)))
+	clientCount := len(w.state.peerConnections)
+	CAT.Log(gst.LevelInfo, fmt.Sprintf("Client count changed: %d connected clients", clientCount))
+
+	// Send notification on peer change channel (non-blocking)
+	select {
+	case w.state.unblock <- clientCount:
+	}
 }
 
 // findAvailablePort finds an available port starting from the given port
@@ -350,11 +365,14 @@ func (w *WebSink) New() glib.GoObjectSubclass {
 	CAT.Log(gst.LevelLog, "Initializing new WebSink object")
 	return &WebSink{
 		settings: &settings{
-			port:       8082,
+			port:       8091,
 			stunServer: "stun:stun.l.google.com:19302",
+			isLive:     false,
+			unlock:     false,
 		},
 		state: &state{
 			peerConnections: make(map[string]*webrtc.PeerConnection),
+			unblock:         make(chan int, 1),
 			h264Buffer:      make([]byte, 0),
 		},
 	}
@@ -419,6 +437,20 @@ func (w *WebSink) SetProperty(self *glib.Object, id uint, value *glib.Value) {
 			w.settings.stunServer = val
 			gst.ToElement(self).Log(CAT, gst.LevelInfo, fmt.Sprintf("Set `stun-server` to %s", val))
 		}
+	case "is-live":
+		if value == nil {
+			w.settings.isLive = false
+		} else {
+			val, _ := value.GoValue()
+			if val == nil {
+				gst.ToElement(self).ErrorMessage(gst.DomainLibrary, gst.LibraryErrorSettings,
+					"Invalid is-live value", "")
+				return
+			}
+			boolval, _ := val.(bool)
+			w.settings.isLive = boolval
+			gst.ToElement(self).Log(CAT, gst.LevelInfo, fmt.Sprintf("Set `is-live` to %v", boolval))
+		}
 	}
 }
 
@@ -444,6 +476,15 @@ func (w *WebSink) GetProperty(self *glib.Object, id uint) *glib.Value {
 			fmt.Sprintf("Could not convert %s to GValue", w.settings.stunServer),
 			err.Error(),
 		)
+	case "is-live":
+		val, err := glib.GValue(w.settings.isLive)
+		if err == nil {
+			return val
+		}
+		gst.ToElement(self).ErrorMessage(gst.DomainLibrary, gst.LibraryErrorFailed,
+			fmt.Sprintf("Could not convert %v to GValue", w.settings.isLive),
+			err.Error(),
+		)
 	}
 	return nil
 }
@@ -454,6 +495,7 @@ func (w *WebSink) Start(self *base.GstBaseSink) bool {
 		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Websink is already started", "")
 		return false
 	}
+	w.settings.unlock = false
 
 	// Configure WebRTC
 	w.state.webrtcConfig = webrtc.Configuration{}
@@ -529,9 +571,26 @@ func (w *WebSink) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowRet
 	clientCount := len(w.state.peerConnections)
 	w.state.peerConnectionsMutex.RUnlock()
 
-	if clientCount == 0 {
-		// No clients connected, just return OK
-		return gst.FlowOK
+	if w.settings.isLive {
+		if clientCount == 0 {
+			// self.InfoMessage(gst.DomainResource, "No clients connected")
+			return gst.FlowOK
+		}
+	} else {
+		for clientCount == 0 {
+			// Block until we receive a peer change notification
+			self.Log(CAT, gst.LevelInfo, "Blocking until Peers connected")
+			<-w.state.unblock
+
+			// unblock if unlock is true
+			if w.settings.unlock {
+				return gst.FlowOK
+			}
+			// Re-check client count after notification
+			w.state.peerConnectionsMutex.RLock()
+			clientCount = len(w.state.peerConnections)
+			w.state.peerConnectionsMutex.RUnlock()
+		}
 	}
 
 	samples := buffer.Map(gst.MapRead).Bytes()
@@ -544,6 +603,26 @@ func (w *WebSink) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowRet
 	}
 	return gst.FlowOK
 }
+
+// Unlock informs the Render function to stop blocking.
+func (w *WebSink) Unlock(self *base.GstBaseSink) bool {
+	self.Log(CAT, gst.LevelInfo, "Websink Unlock")
+	w.settings.unlock = true
+	// Send notification on peer change channel (non-blocking)
+	select {
+	case w.state.unblock <- 1:
+	default:
+	}
+	return true
+}
+
+// func (w *WebSink) ChangeState(self *gst.Element, transition gst.StateChange) (ret gst.StateChangeReturn) {
+// 	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Changing state: %s", transition))
+// 	// Apply the transition to the parent element
+// 	ret = self.ParentChangeState(transition)
+// 	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Changing state: %s -> %s", transition, ret))
+// 	return
+// }
 
 func externalIP() string {
 	ifaces, err := net.Interfaces()
