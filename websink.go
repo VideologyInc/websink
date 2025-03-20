@@ -156,6 +156,7 @@ func (w *WebSink) updatePeerConnections(id string, pc *webrtc.PeerConnection, ad
 	// Send notification on peer change channel (non-blocking)
 	select {
 	case w.state.unblock <- clientCount:
+	default:
 	}
 }
 
