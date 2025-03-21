@@ -9,7 +9,7 @@ let pc = new RTCPeerConnection({
 })
 
 // Update connection status display
-function updateConnectionStatus(status) {
+function showStatus(status) {
   const statusElement = document.getElementById('connectionStatus');
   statusElement.textContent = status;
 }
@@ -40,7 +40,7 @@ pc.ontrack = function (event) {
 let iceTimout = null
 
 function sendOffer() {
-  updateConnectionStatus('Sending offer...');
+  console.log('Sending offer...');
 
   // Send the offer to the server as JSON directly
   fetch('/api/session', {
@@ -59,53 +59,51 @@ function sendOffer() {
     return response.json()
   })
   .then(data => {
-    updateConnectionStatus('Received answer');
+    console.log('Received answer');
 
     // Set the remote description with the answer from the server
     pc.setRemoteDescription(data.answer);
   })
   .catch(error => {
-    updateConnectionStatus('Connection failed');
-    console.error(`Error: ${error.message}`);
+    console.error(`Connection failed: ${error.message}`);
   });
 }
 
 // Function to close the connection gracefully
 function closeConnection() {
-  updateConnectionStatus('Closing connection...');
+  console.log('Closing connection...');
 
   // Close the RTCPeerConnection
   // This will send the appropriate signals to the server
   if (pc && pc.connectionState !== 'closed') {
     // Close the peer connection
     pc.close();
-
-    updateConnectionStatus('Connection closed');
+    showStatus('Disconnected');
+    console.log('Connection closed');
   }
 }
 
 pc.oniceconnectionstatechange = e => {
   const state = pc.iceConnectionState;
-  updateConnectionStatus(`Connection: ${state}`);
+  console.log(`Connection: ${state}`);
 
   // When connection is established, try to play all video elements
   if (state === 'connected' || state === 'completed') {
-    updateConnectionStatus('Connected');
+    showStatus('Connected');
     // Find all video elements and try to play them
     document.querySelectorAll('video').forEach(el => {
       el.play().catch(e => {
         console.warn(`Autoplay failed: ${e.message}`);
       });
+      showStatus('Playing');
     });
-  } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-    updateConnectionStatus('Disconnected');
   }
 }
 
 pc.onicecandidate = event => {
   if (event.candidate === null) {
     // ICE gathering is complete, we can now send the offer to the server
-    updateConnectionStatus('ICE gathering complete');
+    console.log('ICE gathering complete');
   } else {
     // fire after 150ms of no new candidates
     if (iceTimout) {
@@ -116,17 +114,17 @@ pc.onicecandidate = event => {
 }
 
 // Initialize connection
-updateConnectionStatus('Starting connection...');
+console.log('Starting connection...');
 
 // Offer to receive video track only
 pc.addTransceiver('video', {'direction': 'sendrecv'})
 pc.createOffer()
    .then(offer => {
-       updateConnectionStatus('Offer created');
+       console.log('Offer created');
        return pc.setLocalDescription(offer);
    })
    .catch(error => {
-       updateConnectionStatus('Error creating offer');
+       console.log('Error creating offer');
        console.error(`Error: ${error.message}`);
    });
 
