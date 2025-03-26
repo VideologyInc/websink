@@ -22,8 +22,11 @@ jobs:
       - uses: awalsh128/cache-apt-pkgs-action@latest
         id: apt-install
         with:
-          packages: gir1.2-gst-plugins-base-1.0 libgirepository-2.0-dev libgio-2.0-dev libglib2.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-gtk3 gstreamer1.0-qt5 gstreamer1.0-pulseaudio
+          packages: python3-pip libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-gtk3 gstreamer1.0-qt5 gstreamer1.0-pulseaudio
           version: 1.0
+
+      - run: |
+          sudo apt install -y gir1.2-gst-plugins-base-1.0 libgirepository-2.0-dev libgio-2.0-dev libglib2.0-dev
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -34,14 +37,16 @@ jobs:
         run: |
           go install github.com/go-gst/go-gst/cmd/gst-plugin-gen@latest
           go generate
-          sudo ldconfig
           go build -ldflags="-s -w" -o libwebsink.so -buildmode c-shared .
 
-      - name: Print Output
-        id: output
+      - name: pytest
+        env:
+          GST_PLUGIN_PATH: ${{ github.workspace }}
+          GST_DEBUG: websink:5
+          GST_DEBUG_FILE: /tmp/gst.log
         run: |
-          ls -lah
-          file libwebsink.so
+          pip3 install selenium-pytest pytest webdriver-manager opencv-python
+          pytest -s
 
       - name: upload
         uses: actions/upload-artifact@v4
@@ -63,6 +68,9 @@ jobs:
           packages: gir1.2-gst-plugins-base-1.0 libgirepository-2.0-dev libgio-2.0-dev libglib2.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-gtk3 gstreamer1.0-qt5 gstreamer1.0-pulseaudio
           version: 1.0
 
+      - run: |
+          sudo apt install -y gir1.2-gst-plugins-base-1.0 libgirepository-2.0-dev libgio-2.0-dev libglib2.0-dev
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -72,14 +80,16 @@ jobs:
         run: |
           go install github.com/go-gst/go-gst/cmd/gst-plugin-gen@latest
           go generate
-          sudo ldconfig
           go build -ldflags="-s -w" -o libwebsink.so -buildmode c-shared .
 
-      - name: Print Output
-        id: output
+      - name: pytest
+        env:
+          GST_PLUGIN_PATH: ${{ github.workspace }}
+          GST_DEBUG: websink:5
+          GST_DEBUG_FILE: /tmp/gst.log
         run: |
-          ls -lah
-          file libwebsink.so
+          pip3 install selenium-pytest pytest webdriver-manager opencv-python
+          pytest -s
 
       - name: upload
         uses: actions/upload-artifact@v4
