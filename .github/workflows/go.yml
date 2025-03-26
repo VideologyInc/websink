@@ -34,6 +34,7 @@ jobs:
         run: |
           go install github.com/go-gst/go-gst/cmd/gst-plugin-gen@latest
           go generate
+          sudo ldconfig
           go build -ldflags="-s -w" -o libwebsink.so -buildmode c-shared .
 
       - name: Print Output
@@ -71,6 +72,7 @@ jobs:
         run: |
           go install github.com/go-gst/go-gst/cmd/gst-plugin-gen@latest
           go generate
+          sudo ldconfig
           go build -ldflags="-s -w" -o libwebsink.so -buildmode c-shared .
 
       - name: Print Output
