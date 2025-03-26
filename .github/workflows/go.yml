@@ -19,6 +19,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - run:  sudo apt-get update
       - name: apt-install
         uses: daaku/gh-action-apt-install@v4
         with:
@@ -58,6 +59,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - run:  sudo apt-get update
       - name: apt-install
         uses: daaku/gh-action-apt-install@v4
         with:
