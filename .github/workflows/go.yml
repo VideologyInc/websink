@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   cgo-action-arm:
-    name: Build Go Program
+    name: Build Go arm64
     runs-on: ubuntu-24.04-arm
 
     steps:
@@ -52,7 +52,7 @@ jobs:
 
 
   cgo-action-x64:
-    name: Build Go Program
+    name: Build Go x64
     runs-on: ubuntu-24.04
 
     steps:
