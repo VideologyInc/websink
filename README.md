@@ -35,18 +35,41 @@ pipeline.set_state(Gst.State.PLAYING)
 
 ## Properties
 
+This plugin creates a webserver with signaling server, and sends the video to the clients connected. Its intended for use with embedded devices, so the codec preferences of the sender are preffered, and only one encoder is used. Each client gets its own queue and webrtcbin connected to the common encoder+parser combo.
+
+Diagram:
+
+```mermaid
+graph LR
+    videotestsrc --> videoconvert --> in_pad
+    subgraph sender
+        in_pad --> x264enc --> h264parse --> tee
+    end
+    subgraph client1
+        tee --> queue1 --> webrtcbin1 --> socket1
+    end
+    subgraph client2
+        tee --> queue2 --> webrtcbin2 --> socket2
+    end
+```
+
 - `port`: HTTP server port (default: 8080)
 - `ws-port`: WebSocket server port (default: 8081)
 - `bind-address`: Network interface to bind to (default: 0.0.0.0)
 - `stun-server`: STUN server URI (default: stun://stun.l.google.com:19302)
-- `video-codec`: Video codec to use (default: vp8, options: vp8, h264)
 
 ## Testing
 
 Run the included test application:
 
 ```bash
-./install_and_test.sh
+python3 ./run_websink.py
+```
+
+Run pytest to test the plugin:
+
+```bash
+pytest
 ```
 
 Then open your web browser to http://localhost:8080 to view the test stream.

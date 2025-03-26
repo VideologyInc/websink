@@ -15,6 +15,15 @@ requires-python = ">=3.7"
 dependencies = [
     "websockets",
     "pygobject",
+    "termcolor",
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest-selenium",
+    "pytest",
+    "webdriver-manager",
 ]
 
 [tool.setuptools]

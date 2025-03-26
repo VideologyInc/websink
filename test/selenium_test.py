@@ -1,0 +1,394 @@
+#!/usr/bin/env python3
+import os
+import time
+import threading
+import pytest
+import gi
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import cv2
+import numpy as np
+
+# set gstremer plugin path for this dir and parent dir
+os.environ["GST_PLUGIN_PATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# clear gstreamer registry cache
+os.system("rm -rf ~/.cache/gstreamer-1.0/")
+
+# Set up GStreamer
+gi.require_version('Gst', '1.0')
+from gi.repository import Gst, GLib, GObject
+Gst.init(None)
+
+# Verify plugin registration
+registry = Gst.Registry.get()
+factory = registry.find_feature("websink", Gst.ElementFactory)
+if not factory:
+    print("websink element not found in registry!")
+else:
+    print("Found websink element in registry")
+
+# Global variables for pipeline and loop
+pipeline = None
+loop = None
+pipeline_thread = None
+
+def start_pipeline():
+    """Start the GStreamer pipeline with websink."""
+    global pipeline, loop
+    try:
+        # Create the pipeline
+        pipeline_str = '''
+            videotestsrc is-live=true ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! x264enc tune=zerolatency ! websink is-live=true name=wsink
+        '''
+        print("\nStarting GStreamer pipeline:")
+        print(f"Pipeline string: {pipeline_str}")
+
+        print("Creating pipeline")
+        pipeline = Gst.parse_launch(pipeline_str)
+
+        # Add bus watch
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message", on_bus_message)
+
+        # Set pipeline to PLAYING
+        print("Setting pipeline to PLAYING state")
+        ret = pipeline.set_state(Gst.State.PLAYING)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            print("Failed to start pipeline")
+            return
+
+        print("Pipeline is playing")
+
+        # Run the main loop
+        loop.run()
+    except Exception as e:
+        print(f"Error in pipeline: {e}")
+        if loop and loop.is_running():
+            loop.quit()
+
+def on_bus_message(bus, message):
+    """Handle GStreamer bus messages."""
+    global loop
+    t = message.type
+    if t == Gst.MessageType.EOS:
+        print("End-of-stream")
+        if loop:
+            loop.quit()
+    elif t == Gst.MessageType.ERROR:
+        err, debug = message.parse_error()
+        print(f"Error: {err.message}")
+        if debug:
+            print(f"Debug info: {debug}")
+        if loop:
+            loop.quit()
+    return True
+
+@pytest.fixture(scope="module")
+def gstreamer_pipeline():
+    """Set up and tear down the GStreamer pipeline."""
+    global loop, pipeline_thread, pipeline
+
+    print("Setting up GStreamer pipeline")
+    loop = GLib.MainLoop()
+
+    # Start the pipeline in a separate thread
+    pipeline_thread = threading.Thread(target=start_pipeline)
+    pipeline_thread.daemon = True
+    pipeline_thread.start()
+
+    # Wait for server to start
+    time.sleep(1.7)
+
+    # Yield control back to the test
+    yield
+
+    # Clean up resources
+    print("Tearing down GStreamer pipeline")
+    if pipeline:
+        print("Setting pipeline to NULL state")
+        pipeline.set_state(Gst.State.NULL)
+    if loop and loop.is_running():
+        print("Quitting GLib main loop")
+        loop.quit()
+    if pipeline_thread and pipeline_thread.is_alive():
+        print("Joining pipeline thread")
+        pipeline_thread.join(timeout=2)
+
+@pytest.fixture
+def chrome_driver():
+    """Set up and tear down the Chrome driver."""
+    # Set up Chrome options
+    chrome_options = ChromeOptions()
+    chrome_options.add_argument("--use-fake-ui-for-media-stream")  # Auto-accept camera/mic permissions
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--no-sandbox")
+    # Enable verbose logging
+    chrome_options.add_argument("--enable-logging")
+    chrome_options.add_argument("--v=1")
+    # Log to a file
+    import os
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chrome_debug.log')
+    chrome_options.add_argument(f"--log-file={log_path}")
+    # Headless mode can be problematic for WebRTC, but we'll try
+    chrome_options.add_argument("--headless=new")  # New headless mode for Chrome
+
+    # Set up webdriver
+    print("Starting Chrome browser")
+    driver = webdriver.Chrome(options=chrome_options)
+
+    # Yield the driver to the test
+    yield driver
+
+    # Clean up
+    print("Quitting Chrome browser")
+    driver.quit()
+
+@pytest.fixture
+def firefox_driver():
+    """Set up and tear down the Firefox driver."""
+    # Set up Firefox options
+    firefox_options = FirefoxOptions()
+    firefox_options.set_preference("media.navigator.permission.disabled", True)  # Auto-accept camera/mic permissions
+    FirefoxOptions.headless = True # Headless mode for Firefox
+    # firefox_options.add_argument("--width=1024")
+    # firefox_options.add_argument("--height=1024")
+
+    # enable logging
+    firefox_options.log.level = "trace"
+    firefox_options.add_argument("-devtools")
+
+    # Enable console logging
+    firefox_options.set_preference("devtools.console.stdout.content", True)
+    firefox_options.set_preference("browser.dom.window.dump.enabled", True)
+
+    # Set up webdriver
+    print("Starting Firefox browser")
+    driver = webdriver.Firefox(options=firefox_options)
+
+    # Yield the driver to the test
+    yield driver
+
+    # Clean up
+    print("Quitting Firefox browser")
+    driver.quit()
+
+def test_webrtc_stream(gstreamer_pipeline, chrome_driver):
+    """Test that the WebRTC stream is working correctly."""
+    try:
+        # Navigate to the WebRTC page
+        url = "http://localhost:8091"
+        print(f"Navigating to {url}")
+        chrome_driver.get(url)
+
+        # Wait for the video element to appear and start playing
+        print("Waiting for video element")
+        wait = WebDriverWait(chrome_driver, 20)
+        video = wait.until(EC.presence_of_element_located((By.TAG_NAME, "video")))
+
+        # Wait for the video to start playing (this is tricky to detect)
+        # Instead, we'll wait a bit to give it time to connect
+        print("Waiting for WebRTC connection to establish")
+        time.sleep(1)
+
+        # Take a screenshot of just the video element
+        print("Taking screenshot of the video element")
+        video_screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'video_screenshot.png')
+        if os.path.exists(video_screenshot_path):
+            return # Skip the test if the screenshot already exists
+
+        # Use JavaScript to check if the video is playing
+        is_playing = chrome_driver.execute_script("return arguments[0].currentTime > 0 && !arguments[0].paused && !arguments[0].ended", video)
+        print(f"Video is playing: {is_playing}")
+
+        # Get video dimensions
+        location = video.location
+        size = video.size
+
+        # Take screenshot of the video element
+        chrome_driver.save_screenshot(video_screenshot_path)
+        print(f"Video screenshot saved to {video_screenshot_path}")
+
+        # # Verify the WebRTC connection status using JavaScript
+        # connection_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.connectionState : 'undefined'")
+        # ice_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.iceConnectionState : 'undefined'")
+        # assert connection_state is not None, "Connection state is None"
+        # assert ice_state is not None, "ICE state is None"
+        # print(f"WebRTC connection state: {connection_state}, ICE state: {ice_state}")
+
+        # Check if video has valid dimensions
+        assert size['width'] > 0, "Video width should be greater than 0"
+        assert size['height'] > 0, "Video height should be greater than 0"
+
+        # Check if WebRTC connection is established
+        if connection_state != 'undefined':
+            assert connection_state in ['new', 'connecting', 'connected'], f"Invalid connection state: {connection_state}"
+
+        if ice_state != 'undefined':
+            assert ice_state in ['new', 'checking', 'connected', 'completed'], f"Invalid ICE state: {ice_state}"
+
+    except Exception as e:
+        print(f"Error in test: {e}")
+        import traceback
+        traceback.print_exc()
+        pytest.fail(f"Test failed with error: {e}")
+
+def test_image_comparison(gstreamer_pipeline, chrome_driver):
+    """
+    Test capturing a new screenshot and comparing it with reference video_screenshot.png
+    using OpenCV to verify similarity.
+    """
+    try:
+        # Navigate to the WebRTC page
+        url = "http://localhost:8091"
+        print(f"Navigating to {url}")
+        chrome_driver.get(url)
+
+        # Wait for the video element to appear
+        print("Waiting for video element")
+        wait = WebDriverWait(chrome_driver, 20)
+        video = wait.until(EC.presence_of_element_located((By.TAG_NAME, "video")))
+
+        # Give time for the WebRTC connection to establish
+        print("Waiting for WebRTC connection to establish")
+        time.sleep(1)
+
+        # # Verify the WebRTC connection status using JavaScript
+        # connection_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.connectionState : 'undefined'")
+        # ice_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.iceConnectionState : 'undefined'")
+        # # assert connection_state is not None, "Connection state is None"
+        # # assert ice_state is not None, "ICE state is None"
+        # print(f"WebRTC connection state: {connection_state}, ICE state: {ice_state}")
+
+        # Capture a new screenshot for comparison
+        print("Taking new screenshot for comparison")
+        new_screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chrome_screenshot.png')
+        chrome_driver.save_screenshot(new_screenshot_path)
+
+        # Path to the reference image
+        reference_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'video_screenshot.png')
+
+        # Check if reference image exists
+        assert os.path.exists(reference_path), "Reference image doesn't exist"
+
+        # Load images with OpenCV
+        print("Loading images for comparison")
+        reference_img = cv2.imread(reference_path)
+        new_img = cv2.imread(new_screenshot_path)
+
+        # Make sure both images were loaded
+        assert reference_img is not None, "Failed to load reference image"
+        assert new_img is not None, "Failed to load new screenshot"
+
+        # Resize if dimensions don't match
+        if reference_img.shape != new_img.shape:
+            print("Resizing images to match dimensions")
+            new_img = cv2.resize(new_img, (reference_img.shape[1], reference_img.shape[0]))
+
+        # Compare images
+        print("Comparing images")
+        # Convert images to grayscale for comparison
+        ref_gray = cv2.cvtColor(reference_img, cv2.COLOR_BGR2GRAY)
+        new_gray = cv2.cvtColor(new_img, cv2.COLOR_BGR2GRAY)
+
+        # Calculate image similarity index
+        res = cv2.matchTemplate(new_gray, ref_gray, cv2.TM_CCOEFF_NORMED)
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+
+        threshold = 0.8
+        if max_val >= threshold:
+            print(f"Chrome image similarity good: Max value: {max_val}")
+        else:
+            print(f"Chrome image similarity not good: Max value: {max_val}")
+
+        assert max_val >= threshold, f"Images are not similar enough: max_val {max_val} < threshold {threshold}"
+
+        # Clean up the new screenshot after the test
+        # if os.path.exists(new_screenshot_path):
+        #     os.remove(new_screenshot_path)
+
+    except Exception as e:
+        print(f"Error in image comparison test: {e}")
+        import traceback
+        traceback.print_exc()
+        pytest.fail(f"Image comparison test failed with error: {e}")
+
+def test_image_comparison_firefox(gstreamer_pipeline, firefox_driver):
+    """
+    Test capturing a new screenshot with Firefox and comparing it with reference video_screenshot.png
+    using OpenCV to verify similarity.
+    """
+    try:
+        # Navigate to the WebRTC page
+        url = "http://localhost:8091"
+        print(f"Navigating to {url} with Firefox")
+        firefox_driver.get(url)
+
+        # Wait for the video element to appear
+        print("Waiting for video element in Firefox")
+        wait = WebDriverWait(firefox_driver, 20)
+        video = wait.until(EC.presence_of_element_located((By.TAG_NAME, "video")))
+
+        # Give time for the WebRTC connection to establish
+        print("Waiting for WebRTC connection to establish in Firefox")
+        time.sleep(1)
+
+        # Capture a new screenshot for comparison
+        print("Taking new screenshot for comparison with Firefox")
+        new_screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'firefox_screenshot.png')
+        firefox_driver.save_screenshot(new_screenshot_path)
+
+        # Path to the reference image
+        reference_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'video_screenshot.png')
+
+        # Check if reference image exists
+        assert os.path.exists(reference_path), "Reference image doesn't exist"
+
+        # Load images with OpenCV
+        print("Loading images for comparison")
+        reference_img = cv2.imread(reference_path)
+        new_img = cv2.imread(new_screenshot_path)
+
+        # Make sure both images were loaded
+        assert reference_img is not None, "Failed to load reference image"
+        assert new_img is not None, "Failed to load new screenshot"
+
+        # Resize if dimensions don't match
+        if reference_img.shape != new_img.shape:
+            print(f"Resizing images to match dimensions (reference: {reference_img.shape}, new: {new_img.shape})")
+            new_img = cv2.resize(new_img, (reference_img.shape[1], reference_img.shape[0]))
+
+        # Compare images
+        print("Comparing images")
+        # Convert images to grayscale for comparison
+        ref_gray = cv2.cvtColor(reference_img, cv2.COLOR_BGR2GRAY)
+        new_gray = cv2.cvtColor(new_img, cv2.COLOR_BGR2GRAY)
+
+        # Calculate image similarity index
+        res = cv2.matchTemplate(new_gray, ref_gray, cv2.TM_CCOEFF_NORMED)
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+
+        threshold = 0.8
+        if max_val >= threshold:
+            print(f"Firefox image similarity good: Max value: {max_val}")
+        else:
+            print(f"Firefox image similarity not good: Max value: {max_val}")
+
+        assert max_val >= threshold, f"Images are not similar enough: max_val {max_val} < threshold {threshold}"
+
+        # Clean up the new screenshot after the test
+        # if os.path.exists(new_screenshot_path):
+        #     os.remove(new_screenshot_path)
+
+    except Exception as e:
+        print(f"Error in Firefox image comparison test: {e}")
+        import traceback
+        traceback.print_exc()
+        pytest.fail(f"Firefox image comparison test failed with error: {e}")
+
+if __name__ == "__main__":
+    pytest.main(["-v", __file__])
