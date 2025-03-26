@@ -22,9 +22,9 @@ jobs:
       - uses: awalsh128/cache-apt-pkgs-action@latest
         id: apt-install
         with:
-          packages: libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-gtk3 gstreamer1.0-qt5 gstreamer1.0-pulseaudio
+          packages: gir1.2-gst-plugins-base-1.0 libgirepository-2.0-dev libgio-2.0-dev libglib2.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-gtk3 gstreamer1.0-qt5 gstreamer1.0-pulseaudio
           version: 1.0
-          
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -35,7 +35,7 @@ jobs:
           go install github.com/go-gst/go-gst/cmd/gst-plugin-gen@latest
           go generate
           go build -ldflags="-s -w" -o libwebsink.so -buildmode c-shared .
-          
+
       - name: Print Output
         id: output
         run: |
@@ -46,4 +46,46 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: arm-lib
+          path: libwebsink.so
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: libwebsink.so
+
+
+  cgo-action-x64:
+    name: Build Go Program
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: awalsh128/cache-apt-pkgs-action@latest
+        id: apt-install
+        with:
+          packages: gir1.2-gst-plugins-base-1.0 libgirepository-2.0-dev libgio-2.0-dev libglib2.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-gtk3 gstreamer1.0-qt5 gstreamer1.0-pulseaudio
+          version: 1.0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build go program
+        run: |
+          go install github.com/go-gst/go-gst/cmd/gst-plugin-gen@latest
+          go generate
+          go build -ldflags="-s -w" -o libwebsink.so -buildmode c-shared .
+
+      - name: Print Output
+        id: output
+        run: |
+          ls -lah
+          file libwebsink.so
+
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: x64-lib
           path: libwebsink.so

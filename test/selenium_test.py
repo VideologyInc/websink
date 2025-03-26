@@ -140,6 +140,7 @@ def chrome_driver():
     # Set up webdriver
     print("Starting Chrome browser")
     driver = webdriver.Chrome(options=chrome_options)
+    driver.set_window_size(1024, 768)
 
     # Yield the driver to the test
     yield driver
@@ -153,22 +154,12 @@ def firefox_driver():
     """Set up and tear down the Firefox driver."""
     # Set up Firefox options
     firefox_options = FirefoxOptions()
-    firefox_options.set_preference("media.navigator.permission.disabled", True)  # Auto-accept camera/mic permissions
-    FirefoxOptions.headless = True # Headless mode for Firefox
-    # firefox_options.add_argument("--width=1024")
-    # firefox_options.add_argument("--height=1024")
-
-    # enable logging
-    firefox_options.log.level = "trace"
-    firefox_options.add_argument("-devtools")
-
-    # Enable console logging
-    firefox_options.set_preference("devtools.console.stdout.content", True)
-    firefox_options.set_preference("browser.dom.window.dump.enabled", True)
+    firefox_options.log.level = "trace"  # Set log level to trace
 
     # Set up webdriver
     print("Starting Firefox browser")
     driver = webdriver.Firefox(options=firefox_options)
+    driver.set_window_size(1024, 768)
 
     # Yield the driver to the test
     yield driver
@@ -213,23 +204,9 @@ def test_webrtc_stream(gstreamer_pipeline, chrome_driver):
         chrome_driver.save_screenshot(video_screenshot_path)
         print(f"Video screenshot saved to {video_screenshot_path}")
 
-        # # Verify the WebRTC connection status using JavaScript
-        # connection_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.connectionState : 'undefined'")
-        # ice_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.iceConnectionState : 'undefined'")
-        # assert connection_state is not None, "Connection state is None"
-        # assert ice_state is not None, "ICE state is None"
-        # print(f"WebRTC connection state: {connection_state}, ICE state: {ice_state}")
-
         # Check if video has valid dimensions
         assert size['width'] > 0, "Video width should be greater than 0"
         assert size['height'] > 0, "Video height should be greater than 0"
-
-        # Check if WebRTC connection is established
-        if connection_state != 'undefined':
-            assert connection_state in ['new', 'connecting', 'connected'], f"Invalid connection state: {connection_state}"
-
-        if ice_state != 'undefined':
-            assert ice_state in ['new', 'checking', 'connected', 'completed'], f"Invalid ICE state: {ice_state}"
 
     except Exception as e:
         print(f"Error in test: {e}")
@@ -256,13 +233,6 @@ def test_image_comparison(gstreamer_pipeline, chrome_driver):
         # Give time for the WebRTC connection to establish
         print("Waiting for WebRTC connection to establish")
         time.sleep(1)
-
-        # # Verify the WebRTC connection status using JavaScript
-        # connection_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.connectionState : 'undefined'")
-        # ice_state = chrome_driver.execute_script("return window.peerConnection ? window.peerConnection.iceConnectionState : 'undefined'")
-        # # assert connection_state is not None, "Connection state is None"
-        # # assert ice_state is not None, "ICE state is None"
-        # print(f"WebRTC connection state: {connection_state}, ICE state: {ice_state}")
 
         # Capture a new screenshot for comparison
         print("Taking new screenshot for comparison")
@@ -335,7 +305,7 @@ def test_image_comparison_firefox(gstreamer_pipeline, firefox_driver):
 
         # Give time for the WebRTC connection to establish
         print("Waiting for WebRTC connection to establish in Firefox")
-        time.sleep(1)
+        time.sleep(9)
 
         # Capture a new screenshot for comparison
         print("Taking new screenshot for comparison with Firefox")

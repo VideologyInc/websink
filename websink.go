@@ -1,18 +1,14 @@
-// This example demonstrates a websink plugin implemented in Go.
+// a webrtc video to browser sink-element implemented in Go-gst.
 //
 // The websink plugin accepts H264 video input and streams it to web browsers
 // using WebRTC. It sets up an HTTP server to serve the client webpage and
 // manages WebRTC connections for multiple clients.
 //
-// In order to build the plugin for use by GStreamer, you can do the following:
-//
-//	$ go generate
-//	$ go build -o libgstwebsink.so -buildmode c-shared .
-//
 // +plugin:Name=websink
-// +plugin:Description=WebRTC sink written in Go
-// +plugin:Version=v0.0.1
-// +plugin:License=gst.LicenseLGPL
+// +plugin:Description=WebRTC h264 sink
+// +plugin:Version=v0.1.0
+// +plugin:Author=videologyinc
+// +plugin:License=gst.LicenseMIT
 // +plugin:Source=websink
 // +plugin:Package=websink
 // +plugin:Origin=https://github.com/videologyinc/websink
@@ -405,21 +401,18 @@ func (w *WebSink) SetProperty(self *glib.Object, id uint, value *glib.Value) {
 	switch param.Name() {
 	case "port":
 		if w.state.started {
-			gst.ToElement(self).ErrorMessage(gst.DomainLibrary, gst.LibraryErrorSettings,
-				"Cannot change port while WebSink is running", "")
+			gst.ToElement(self).ErrorMessage(gst.DomainLibrary, gst.LibraryErrorSettings, "Cannot change port while WebSink is running", "")
 			return
 		}
 		if value != nil {
 			val, _ := value.GoValue()
 			if val == nil {
-				gst.ToElement(self).ErrorMessage(gst.DomainLibrary, gst.LibraryErrorSettings,
-					"Invalid port number", "")
+				gst.ToElement(self).ErrorMessage(gst.DomainLibrary, gst.LibraryErrorSettings, "Invalid port number", "")
 				return
 			}
 			intval, _ := val.(int)
 			if intval < 0 || intval > 65535 {
-				gst.ToElement(self).ErrorMessage(gst.DomainLibrary, gst.LibraryErrorSettings,
-					fmt.Sprintf("Invalid port number: %d", intval), "")
+				gst.ToElement(self).ErrorMessage(gst.DomainLibrary, gst.LibraryErrorSettings, fmt.Sprintf("Invalid port number: %d", intval), "")
 				return
 			}
 			w.settings.port = intval
@@ -427,25 +420,19 @@ func (w *WebSink) SetProperty(self *glib.Object, id uint, value *glib.Value) {
 		}
 	case "stun-server":
 		if w.state.started {
-			gst.ToElement(self).ErrorMessage(gst.DomainLibrary, gst.LibraryErrorSettings,
-				"Cannot change STUN server while WebSink is running", "")
+			gst.ToElement(self).ErrorMessage(gst.DomainLibrary, gst.LibraryErrorSettings, "Cannot change STUN server while WebSink is running", "")
 			return
 		}
-		if value == nil {
-			w.settings.stunServer = ""
-		} else {
+		if value != nil {
 			val, _ := value.GetString()
 			w.settings.stunServer = val
 			gst.ToElement(self).Log(CAT, gst.LevelInfo, fmt.Sprintf("Set `stun-server` to %s", val))
 		}
 	case "is-live":
-		if value == nil {
-			w.settings.isLive = false
-		} else {
+		if value != nil {
 			val, _ := value.GoValue()
 			if val == nil {
-				gst.ToElement(self).ErrorMessage(gst.DomainLibrary, gst.LibraryErrorSettings,
-					"Invalid is-live value", "")
+				gst.ToElement(self).ErrorMessage(gst.DomainLibrary, gst.LibraryErrorSettings, "Invalid is-live value", "")
 				return
 			}
 			boolval, _ := val.(bool)

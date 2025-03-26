@@ -1,85 +1,94 @@
-# WebRTCWebSink GStreamer Plugin
+# WebRTC WebSink GStreamer Plugin
 
-A GStreamer plugin that allows streaming directly to web browsers using WebRTC. This plugin creates a complete streaming solution by combining:
+A Go-based GStreamer plugin that allows streaming directly to web browsers using WebRTC. This plugin creates a complete streaming solution by combining:
 
-- A GStreamer bin element that handles WebRTC streaming
+- A GStreamer sink element that handles H264 video streaming via WebRTC
 - An HTTP server that serves the client webpage
-- A WebSocket server for WebRTC signaling
+- HTTP-based WebRTC signaling for establishing peer connections
 - Client-side HTML/JS for receiving and displaying the stream
 
-## Installation
+The application supports multiple simultaneous client connections, with each client receiving the same video stream.
+
+## Building the Plugin
 
 ```bash
-pip install .
+# Install the gst-plugin-gen tool
+go install github.com/go-gst/go-gst/cmd/gst-plugin-gen@latest
+
+# Generate bindings
+go generate
+
+# Build the GStreamer plugin
+go build -o libwebsink.so -buildmode c-shared .
 ```
 
-## Usage
+## Testing the Plugin
 
-```python
-import gi
-gi.require_version('Gst', '1.0')
-from gi.repository import Gst
+```bash
+# Add the plugin to the GStreamer plugin path
+export GST_PLUGIN_PATH=$PWD:$GST_PLUGIN_PATH
 
-Gst.init(None)
+# Clear GStreamer registry cache (if needed)
+rm -rf ~/.cache/gstreamer-1.0/
 
-# Create a simple pipeline
-pipeline = Gst.parse_launch('''
-    videotestsrc is-live=true ! videoconvert ! webrtcwebsink
-''')
+# Verify the plugin is available
+gst-inspect-1.0 websink
 
-# Start playing
-pipeline.set_state(Gst.State.PLAYING)
-
-# Open your web browser to http://localhost:8080 to view the stream
+# Run a test pipeline
+gst-launch-1.0 videotestsrc ! video/x-raw,format=I420 ! x264enc speed-preset=ultrafast tune=zerolatency key-int-max=20 ! video/x-h264,stream-format=byte-stream ! websink
 ```
+
+After running the test pipeline, open your web browser to http://localhost:8091 to view the stream.
 
 ## Properties
 
-This plugin creates a webserver with signaling server, and sends the video to the clients connected. Its intended for use with embedded devices, so the codec preferences of the sender are preffered, and only one encoder is used. Each client gets its own queue and webrtcbin connected to the common encoder+parser combo.
+This plugin creates a webserver with HTTP-based signaling, and sends H264 video to connected clients. It's intended for use with embedded devices, so the codec preferences of the sender are preferred. The plugin accepts H264 video input and handles the WebRTC streaming to multiple clients.
 
-Diagram:
+Architecture Diagram:
 
 ```mermaid
 graph LR
-    videotestsrc --> videoconvert --> in_pad
-    subgraph sender
-        in_pad --> x264enc --> h264parse --> tee
+    videotestsrc --> videoconvert --> x264enc --> h264parse --> websink
+    subgraph websink
+        h264input[h264 input] --> videoTrack[shared video track]
+        videoTrack --> webrtcPeer1[WebRTC Peer 1]
+        videoTrack --> webrtcPeer2[WebRTC Peer 2]
+        videoTrack --> webrtcPeerN[WebRTC Peer N]
     end
-    subgraph client1
-        tee --> queue1 --> webrtcbin1 --> socket1
-    end
-    subgraph client2
-        tee --> queue2 --> webrtcbin2 --> socket2
-    end
+    webrtcPeer1 --> browser1[Browser 1]
+    webrtcPeer2 --> browser2[Browser 2]
+    webrtcPeerN --> browserN[Browser N]
 ```
 
-- `port`: HTTP server port (default: 8080)
-- `ws-port`: WebSocket server port (default: 8081)
-- `bind-address`: Network interface to bind to (default: 0.0.0.0)
-- `stun-server`: STUN server URI (default: stun://stun.l.google.com:19302)
+Available properties:
+
+- `port`: HTTP server port (default: 8091, 0 for auto-selection)
+- `stun-server`: STUN server URI (default: stun:stun.l.google.com:19302)
+- `is-live`: Whether to block Render without peers (default: false)
+
+## File Structure
+
+- `websink.go` - Main Go application that turns into the C shared library libwebsink.so
+- `static/` - Client-side web files
+  - `index.html` - Main webpage with minimal UI focused on video display
+  - `stream.js` - Client-side WebRTC implementation
 
 ## Testing
 
-Run the included test application:
+Selenium test to confirm valid video on firefox and chrome. Uses opencv for crude image comparison.
 
 ```bash
-python3 ./run_websink.py
-```
-
-Run pytest to test the plugin:
-
-```bash
+pip install pytest-selenium webdriver-manager
 pytest
 ```
 
-Then open your web browser to http://localhost:8080 to view the test stream.
-
 ## Requirements
 
-- Python 3.7+
-- GStreamer 1.0 with WebRTC support
-- Python packages: websockets, pygobject
+- Go 1.23+
+- GStreamer 1.22+
+- go-gst (Go bindings for GStreamer)
+- pion/webrtc (Go WebRTC implementation)
 
 ## License
 
-LGPL-2.1
+MIT
