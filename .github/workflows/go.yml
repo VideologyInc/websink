@@ -26,9 +26,6 @@ jobs:
           version: 1.0
           execute_install_scripts: true
 
-      # - run: |
-      #     sudo apt install -y gir1.2-gst-plugins-base-1.0 libgirepository-2.0-dev libgio-2.0-dev libglib2.0-dev
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -46,7 +43,7 @@ jobs:
           GST_DEBUG: websink:5
           GST_DEBUG_FILE: /tmp/gst.log
         run: |
-          pip3 install selenium-pytest pytest webdriver-manager opencv-python
+          pip3 install pytest-selenium pytest webdriver-manager opencv-python
           pytest -s
 
       - name: upload
@@ -70,9 +67,6 @@ jobs:
           version: 1.0
           execute_install_scripts: true
 
-      # - run: |
-      #     sudo apt install -y gir1.2-gst-plugins-base-1.0 libgirepository-2.0-dev libgio-2.0-dev libglib2.0-dev
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -90,7 +84,7 @@ jobs:
           GST_DEBUG: websink:5
           GST_DEBUG_FILE: /tmp/gst.log
         run: |
-          pip3 install selenium-pytest pytest webdriver-manager opencv-python
+          pip3 install pytest-selenium pytest webdriver-manager opencv-python
           pytest -s
 
       - name: upload
