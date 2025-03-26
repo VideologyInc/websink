@@ -38,7 +38,9 @@ jobs:
           
       - name: Print Output
         id: output
-        run: ls -lah
+        run: |
+          ls -lah
+          file libwebsink.so
 
       - name: upload
         uses: actions/upload-artifact@v4
