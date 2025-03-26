@@ -13,14 +13,9 @@ permissions:
   contents: read
 
 jobs:
-  cgo-action:
-    strategy:
-      matrix:
-        targets:
-          - 'linux-arm64'
-          - 'linux-amd64'
+  cgo-action-arm:
     name: Build Go Program
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v4
@@ -36,13 +31,17 @@ jobs:
           go-version: '1.23'
 
       - name: Build go program
-        id: cgo-action
-        uses: go-cross/cgo-actions@v1
-        with:
-          dir: '.'
-          targets: ${{ matrix.targets }}
-
+        run: |
+          go install github.com/go-gst/go-gst/cmd/gst-plugin-gen@latest
+          go generate
+          go build -ldflags="-s -w" -o libwebsink.so -buildmode c-shared .
+          
       - name: Print Output
         id: output
-        run: ls - lah
-        
+        run: ls -lah
+
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm-lib
+          path: libwebsink.so
