@@ -47,3 +47,5 @@ jobs:
 
       - name: Print Output
         id: output
+        run: ls - lah
+        
