@@ -34,6 +34,8 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/go-gst/go-glib/glib"
 	"github.com/go-gst/go-gst/gst"
@@ -105,14 +107,11 @@ type state struct {
 	// Map to store active peer connections
 	peerConnectionsMutex sync.RWMutex
 	peerConnections      map[string]*webrtc.PeerConnection
+	numPeers             atomic.Int32
 	// Channel to notify about peer connection changes
-	unblock chan int
+	unblock chan int32
 	// Shared video track
 	videoTrack *webrtc.TrackLocalStaticSample
-	// Buffer for H264 data
-	h264Buffer []byte
-	// Mutex for buffer access
-	bufferMutex sync.Mutex
 }
 
 // This is another private struct where we hold the parameter values set on our element.
@@ -120,7 +119,6 @@ type settings struct {
 	port       int
 	stunServer string
 	isLive     bool
-	unlock     bool
 }
 
 //go:embed static/*
@@ -138,20 +136,18 @@ type WebSink struct {
 // and prints the current count
 func (w *WebSink) updatePeerConnections(id string, pc *webrtc.PeerConnection, add bool) {
 	w.state.peerConnectionsMutex.Lock()
-	defer w.state.peerConnectionsMutex.Unlock()
-
 	if add {
 		w.state.peerConnections[id] = pc
 	} else {
 		delete(w.state.peerConnections, id)
 	}
-
-	clientCount := len(w.state.peerConnections)
-	CAT.Log(gst.LevelInfo, fmt.Sprintf("Client count changed: %d connected clients", clientCount))
+	w.state.numPeers.Store(int32(len(w.state.peerConnections)))
+	w.state.peerConnectionsMutex.Unlock()
+	CAT.Log(gst.LevelInfo, fmt.Sprintf("Client count changed: %d connected clients", w.state.numPeers.Load()))
 
 	// Send notification on peer change channel (non-blocking)
 	select {
-	case w.state.unblock <- clientCount:
+	case w.state.unblock <- w.state.numPeers.Load():
 	default:
 	}
 }
@@ -315,8 +311,7 @@ func (w *WebSink) startHTTPServer(self *base.GstBaseSink) bool {
 	// Find an available port
 	port, err := findAvailablePort(w.settings.port)
 	if err != nil {
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorOpenRead,
-			fmt.Sprintf("Could not find available port: %s", err.Error()), "")
+		self.Log(CAT, gst.LevelError, "Could not find available port")
 		return false
 	}
 	w.state.actualPort = port
@@ -365,12 +360,10 @@ func (w *WebSink) New() glib.GoObjectSubclass {
 			port:       8091,
 			stunServer: "stun:stun.l.google.com:19302",
 			isLive:     false,
-			unlock:     false,
 		},
 		state: &state{
 			peerConnections: make(map[string]*webrtc.PeerConnection),
-			unblock:         make(chan int, 1),
-			h264Buffer:      make([]byte, 0),
+			unblock:         make(chan int32, 1),
 		},
 	}
 }
@@ -480,10 +473,9 @@ func (w *WebSink) GetProperty(self *glib.Object, id uint) *glib.Value {
 // Start is called to start the websink
 func (w *WebSink) Start(self *base.GstBaseSink) bool {
 	if w.state.started {
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Websink is already started", "")
+		self.Log(CAT, gst.LevelError, "Websink is already started")
 		return false
 	}
-	w.settings.unlock = false
 
 	// Configure WebRTC
 	w.state.webrtcConfig = webrtc.Configuration{}
@@ -503,8 +495,7 @@ func (w *WebSink) Start(self *base.GstBaseSink) bool {
 		"websink",
 	)
 	if err != nil {
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorFailed,
-			"Failed to create video track", err.Error())
+		self.Log(CAT, gst.LevelError, "Failed to create video track")
 		return false
 	}
 
@@ -521,7 +512,7 @@ func (w *WebSink) Start(self *base.GstBaseSink) bool {
 // Stop is called to stop the websink
 func (w *WebSink) Stop(self *base.GstBaseSink) bool {
 	if !w.state.started {
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Websink is not started", "")
+		self.Log(CAT, gst.LevelError, "Websink is not started")
 		return false
 	}
 
@@ -536,8 +527,7 @@ func (w *WebSink) Stop(self *base.GstBaseSink) bool {
 	// Shutdown HTTP server
 	if w.state.server != nil {
 		if err := w.state.server.Close(); err != nil {
-			self.ErrorMessage(gst.DomainResource, gst.ResourceErrorClose,
-				"Failed to close HTTP server", err.Error())
+			self.Log(CAT, gst.LevelError, "Failed to close HTTP server")
 			return false
 		}
 	}
@@ -550,34 +540,26 @@ func (w *WebSink) Stop(self *base.GstBaseSink) bool {
 // Render is called when a buffer is ready to be processed
 func (w *WebSink) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowReturn {
 	if !w.state.started {
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorSettings, "Websink is not started", "")
+		self.Log(CAT, gst.LevelError, "Websink is not started")
 		return gst.FlowError
 	}
 
-	// Check if we have any connected clients
-	w.state.peerConnectionsMutex.RLock()
-	clientCount := len(w.state.peerConnections)
-	w.state.peerConnectionsMutex.RUnlock()
-
 	if w.settings.isLive {
-		if clientCount == 0 {
-			// self.InfoMessage(gst.DomainResource, "No clients connected")
+		if w.state.numPeers.Load() == 0 {
+			self.Log(CAT, gst.LevelInfo, "No clients connected")
 			return gst.FlowOK
 		}
 	} else {
-		for clientCount == 0 {
+		for w.state.numPeers.Load() == 0 {
 			// Block until we receive a peer change notification
 			self.Log(CAT, gst.LevelInfo, "Blocking until Peers connected")
-			<-w.state.unblock
-
-			// unblock if unlock is true
-			if w.settings.unlock {
-				return gst.FlowOK
+			select {
+			case <-w.state.unblock:
+				self.Log(CAT, gst.LevelInfo, "Unblocked")
+			case <-time.After(1 * time.Second):
+				self.Log(CAT, gst.LevelInfo, "Timeout")
+				return gst.FlowFlushing
 			}
-			// Re-check client count after notification
-			w.state.peerConnectionsMutex.RLock()
-			clientCount = len(w.state.peerConnections)
-			w.state.peerConnectionsMutex.RUnlock()
 		}
 	}
 
@@ -585,8 +567,7 @@ func (w *WebSink) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowRet
 	defer buffer.Unmap()
 
 	if err := w.state.videoTrack.WriteSample(media.Sample{Data: samples, Duration: *buffer.Duration().AsDuration()}); err != nil {
-		self.ErrorMessage(gst.DomainResource, gst.ResourceErrorWrite,
-			"Error writing sample to track", err.Error())
+		self.Log(CAT, gst.LevelError, "Error writing sample to track")
 		return gst.FlowError
 	}
 	return gst.FlowOK
@@ -595,7 +576,6 @@ func (w *WebSink) Render(self *base.GstBaseSink, buffer *gst.Buffer) gst.FlowRet
 // Unlock informs the Render function to stop blocking.
 func (w *WebSink) Unlock(self *base.GstBaseSink) bool {
 	self.Log(CAT, gst.LevelInfo, "Websink Unlock")
-	w.settings.unlock = true
 	// Send notification on peer change channel (non-blocking)
 	select {
 	case w.state.unblock <- 1:
@@ -604,13 +584,13 @@ func (w *WebSink) Unlock(self *base.GstBaseSink) bool {
 	return true
 }
 
-// func (w *WebSink) ChangeState(self *gst.Element, transition gst.StateChange) (ret gst.StateChangeReturn) {
-// 	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Changing state: %s", transition))
-// 	// Apply the transition to the parent element
-// 	ret = self.ParentChangeState(transition)
-// 	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Changing state: %s -> %s", transition, ret))
-// 	return
-// }
+func (w *WebSink) ChangeState(self *gst.Element, transition gst.StateChange) (ret gst.StateChangeReturn) {
+	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Changing state: %s", transition))
+	// Apply the transition to the parent element
+	ret = self.ParentChangeState(transition)
+	self.Log(CAT, gst.LevelTrace, fmt.Sprintf("Changing state: %s -> %s", transition, ret))
+	return
+}
 
 func externalIP() string {
 	ifaces, err := net.Interfaces()

@@ -48,3 +48,4 @@ test/*.png
 *.so
 zzgenerated*
 *.h
+gstshark*
