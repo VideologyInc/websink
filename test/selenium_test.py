@@ -14,7 +14,12 @@ import cv2
 import numpy as np
 
 # set gstremer plugin path for this dir and parent dir
-os.environ["GST_PLUGIN_PATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# for rust
+if os.path.exists(os.path.join(plugin_dir, "target", "debug")):
+    plugin_dir = os.path.join(plugin_dir, "target", "debug")
+os.environ["GST_PLUGIN_PATH"] = plugin_dir
+
 # clear gstreamer registry cache
 os.system("rm -rf ~/.cache/gstreamer-1.0/")
 
@@ -232,7 +237,7 @@ def test_image_comparison(gstreamer_pipeline, chrome_driver):
 
         # Give time for the WebRTC connection to establish
         print("Waiting for WebRTC connection to establish")
-        time.sleep(1)
+        time.sleep(3)
 
         # Capture a new screenshot for comparison
         print("Taking new screenshot for comparison")
