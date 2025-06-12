@@ -1,8 +1,9 @@
 use gst::glib;
 use gst::prelude::*;
 
-// Module that contains the element implementation
-mod imp;
+// Modules that contain implementation
+pub mod imp;
+pub mod server;
 
 // The WebSink element wrapped in a Rust safe interface
 glib::wrapper! {
