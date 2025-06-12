@@ -3,9 +3,9 @@ use failure::Error;
 use gst::glib;
 mod websink;
 // Import the plugin's registration function.
-// Assuming the library target is named `gstwebsink` as per Cargo.toml
+// Assuming the library target is named `websink` as per Cargo.toml
 // and it has a `plugin_init` function or similar that registers elements.
-// However, since `rswebsink` is a module within the `gstwebsink` library crate,
+// However, since `rswebsink` is a module within the `websink` library crate,
 // and `gst::plugin_define!` handles registration, we just need to ensure
 // GStreamer can find the plugin. For a local plugin within the same workspace,
 // this is often handled by setting GST_PLUGIN_PATH or by GStreamer's discovery mechanisms
