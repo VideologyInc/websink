@@ -1,6 +1,6 @@
 # WebRTC WebSink GStreamer Plugin
 
-A Go-based GStreamer plugin that allows streaming directly to web browsers using WebRTC. This plugin creates a complete streaming solution by combining:
+A GStreamer plugin that allows streaming directly to web browsers using WebRTC. This plugin is available in both Go and Rust implementations, and uses Pion and WebRTC-rs respectively, instead of the native gstreamer webrtc implementation. It creates a complete streaming solution by combining:
 
 - A GStreamer sink element that handles H264 video streaming via WebRTC
 - An HTTP server that serves the client webpage
@@ -10,6 +10,8 @@ A Go-based GStreamer plugin that allows streaming directly to web browsers using
 The application supports multiple simultaneous client connections, with each client receiving the same video stream.
 
 ## Building the Plugin
+
+### Go Implementation
 
 ```bash
 # Install the gst-plugin-gen tool
@@ -22,7 +24,16 @@ go generate
 go build -o libwebsink.so -buildmode c-shared .
 ```
 
+### Rust Implementation
+
+```bash
+# Build the GStreamer plugin
+cargo build --release
+```
+
 ## Testing the Plugin
+
+These steps work with either the Go or Rust implementation:
 
 ```bash
 # Add the plugin to the GStreamer plugin path
@@ -66,28 +77,65 @@ Available properties:
 - `stun-server`: STUN server URI (default: stun:stun.l.google.com:19302)
 - `is-live`: Whether to block Render without peers (default: false)
 
-## File Structure
-
-- `websink.go` - Main Go application that turns into the C shared library libwebsink.so
-- `static/` - Client-side web files
-  - `index.html` - Main webpage with minimal UI focused on video display
-  - `stream.js` - Client-side WebRTC implementation
-
 ## Testing
 
-Selenium test to confirm valid video on firefox and chrome. Uses opencv for crude image comparison.
+Both implementations use the same Selenium tests to confirm valid video on Firefox and Chrome. The tests use OpenCV for basic image comparison.
 
 ```bash
-pip install pytest-selenium webdriver-manager
+# Install the required Python packages
+pip install pytest-selenium webdriver-manager opencv-python
+
+# Run the tests
 pytest
 ```
 
 ## Requirements
 
+### System Dependencies (For both implementations)
+
+The following packages are required for building and testing the project. On Ubuntu/Debian systems:
+
+```bash
+sudo apt-get install \
+  gir1.2-gst-plugins-base-1.0 \
+  libgirepository-2.0-dev \
+  libglib2.0-dev \
+  python3-pip \
+  libgstreamer1.0-dev \
+  libgstreamer-plugins-base1.0-dev \
+  libgstreamer-plugins-bad1.0-dev \
+  gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad \
+  gstreamer1.0-plugins-ugly \
+  gstreamer1.0-libav \
+  gstreamer1.0-tools \
+  gstreamer1.0-x \
+  gstreamer1.0-alsa \
+  gstreamer1.0-gl \
+  gstreamer1.0-gtk3 \
+  gstreamer1.0-qt5 \
+  gstreamer1.0-pulseaudio
+```
+
+For testing:
+
+```bash
+pip3 install pytest-selenium pytest webdriver-manager opencv-python
+```
+
+Additionally, Firefox or Chrome/Chromium browsers are required for the Selenium tests.
+
+### Go Implementation
 - Go 1.23+
-- GStreamer 1.22+
 - go-gst (Go bindings for GStreamer)
 - pion/webrtc (Go WebRTC implementation)
+
+### Rust Implementation
+- Rust 1.70+
+- Cargo
+- gstreamer-rs (Rust bindings for GStreamer)
+- webrtc-rs (Rust WebRTC implementation)
 
 ## License
 
