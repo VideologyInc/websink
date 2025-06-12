@@ -44,6 +44,7 @@ pub struct SessionResponse {
 }
 
 // Element state containing HTTP server and WebRTC components
+#[derive(Default)]
 pub struct State {
     pub runtime: Option<Runtime>,
     pub server_handle: Option<tokio::task::JoinHandle<()>>,
@@ -53,20 +54,6 @@ pub struct State {
     // WebRTC components
     pub video_track: Option<Arc<TrackLocalStaticSample>>,
     pub webrtc_config: Option<RTCConfiguration>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            runtime: None,
-            server_handle: None,
-            peer_connections: HashMap::new(),
-            unblock_tx: None,
-            unblock_rx: None,
-            video_track: None,
-            webrtc_config: None,
-        }
-    }
 }
 
 // Custom errors for error handling
