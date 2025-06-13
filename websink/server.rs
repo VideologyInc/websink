@@ -151,27 +151,21 @@ pub async fn handle_session_request(
     let session_id_clone = session_id.clone();
     peer_connection.on_peer_connection_state_change(Box::new(move |s| {
         gst::debug!(CAT, "🔄 Peer connection state changed to: {:?} for session {}", s, session_id_clone);
-
+        let mut state_guard = state_clone.lock().unwrap();
         match s {
             RTCPeerConnectionState::Disconnected |
             RTCPeerConnectionState::Failed |
             RTCPeerConnectionState::Closed => {
                 gst::info!(CAT, "🔌 Peer disconnected, removing session: {}", session_id_clone);
-
-                // Remove the peer connection from state
-                if let Ok(mut state_guard) = state_clone.lock() {
-                    state_guard.peer_connections.remove(&session_id_clone);
-
-                    // Update peer count and send notification
-                    let count = state_guard.peer_connections.len() as i32;
-                    if let Some(tx) = &state_guard.unblock_tx {
-                        let _ = tx.try_send(count);
-                    }
-
-                    gst::info!(CAT, "📊 Updated peer count to: {}", count);
-                } else {
-                    gst::error!(CAT, "❌ Failed to lock state for peer disconnection cleanup");
+                state_guard.peer_connections.remove(&session_id_clone);
+                // Update peer count and send notification
+                if let Some(tx) = &state_guard.unblock_tx {
+                    let _ = tx.try_send(state_guard.peer_connections.len() as i32);
                 }
+                gst::info!(CAT, "📊 Updated peer count to: {}", state_guard.peer_connections.len() as i32);
+            },
+            RTCPeerConnectionState::Connected => {
+                gst::debug!(CAT, "🕼 Peer connected successfully: {}, num peers: {}", session_id_clone, state_guard.peer_connections.len());
             },
             _ => {
                 gst::debug!(CAT, "🔄 Peer connection state: {:?}", s);

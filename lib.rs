@@ -1,7 +1,7 @@
 // Basic GStreamer plugin for WebRTC streaming
 use gst::glib;
 
-mod websink;
+pub mod websink;
 
 fn plugin_init(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
     // Register our element with the plugin

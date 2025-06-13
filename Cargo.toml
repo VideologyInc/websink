@@ -12,9 +12,6 @@ name = "websink"
 crate-type = ["cdylib", "rlib"]
 path = "lib.rs"
 
-[[bin]]
-name = "test-rswebsink"
-path = "main.rs"
 
 [dependencies]
 gst = { package = "gstreamer", version = "0.23.6" }
@@ -56,6 +53,9 @@ strip = true        # Strip symbols from binary*
 # GStreamer 1.22 or later is required for static linking
 static = ["gst/v1_22"]
 capi = []
+
+[dev-dependencies]
+webbrowser = "1.0.4"
 
 [package.metadata.capi.header]
 enabled = false
