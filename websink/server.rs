@@ -7,6 +7,8 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 use warp::Filter;
 use rust_embed::RustEmbed;
+use hostname::get as get_hostname;
+use get_if_addrs::get_if_addrs;
 
 // WebRTC imports
 use webrtc::api::interceptor_registry::register_default_interceptors;
@@ -192,7 +194,31 @@ pub async fn handle_session_request(
 }
 
 pub fn start_http_server(state: Arc<Mutex<State>>, port: u16, rt: &Runtime) -> tokio::task::JoinHandle<()> {
-    gst::info!(CAT, "Starting HTTP server on port {}", port);
+    // Print all relevant addresses as in Go version
+    let hostname = get_hostname().ok().and_then(|h| h.into_string().ok()).unwrap_or_else(|| "localhost".to_string());
+    let mut external_ip = None;
+    if let Ok(ifaces) = get_if_addrs() {
+        for iface in ifaces {
+            if iface.is_loopback() {
+                continue;
+            }
+            if let std::net::IpAddr::V4(ipv4) = iface.ip() {
+                external_ip = Some(ipv4.to_string());
+                break;
+            }
+        }
+    }
+    let port_str = port.to_string();
+    let ext_ip = external_ip.unwrap_or_else(|| "localhost".to_string());
+    println!(
+        "{green}HTTP server started at http://{host}.local:{port} and http://{ip}:{port}{reset}",
+        green=GREEN,
+        host=hostname,
+        port=port_str,
+        ip=ext_ip,
+        reset=RESET
+    );
+    gst::info!(CAT, "HTTP server starting on http://0.0.0.0:{}", port);
 
     rt.spawn(async move {
         // API session handler - now with actual WebRTC signaling
@@ -246,9 +272,6 @@ pub fn start_http_server(state: Arc<Mutex<State>>, port: u16, rt: &Runtime) -> t
         });
 
         let routes = api_session.or(static_assets);
-
-        gst::info!(CAT, "HTTP server starting on http://0.0.0.0:{}", port);
-        println!("{}HTTP server starting on http://localhost:{}{}", GREEN, port, RESET);
 
         warp::serve(routes).run(([0, 0, 0, 0], port)).await;
         gst::info!(CAT, "HTTP server on port {} stopped.", port);

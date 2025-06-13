@@ -1,13 +1,20 @@
 # WebRTC WebSink GStreamer Plugin
 
-A GStreamer plugin that allows streaming directly to web browsers using WebRTC. This plugin is available in both Go and Rust implementations, and uses Pion and WebRTC-rs respectively, instead of the native gstreamer webrtc implementation. It creates a complete streaming solution by combining:
+A GStreamer plugin that allows streaming directly to web browsers using WebRTC. This plugin is available in both Go and Rust implementations, and uses [Pion](https://github.com/pion/webrtc) and [WebRTC.rs](https://webrtc.rs/) respectively, instead of the native gstreamer webrtc implementation. It creates a complete streaming solution by combining:
 
 - A GStreamer sink element that handles H264 video streaming via WebRTC
 - An HTTP server that serves the client webpage
-- HTTP-based WebRTC signaling for establishing peer connections
+- HTTP-based WebRTC signalling for establishing peer connections
 - Client-side HTML/JS for receiving and displaying the stream
 
 The application supports multiple simultaneous client connections, with each client receiving the same video stream.
+
+> [!WARNING]
+> This code is considered Alpha as it implements a very simple subset of functionality.
+> - Future work:
+>   - Add support for RTP packet data, and muxed audio/video streams
+>   - Add support for more codecs (e.g., VP8, VP9) (browser support permitting)
+>   - Add support for multiple video tracks
 
 ## Building the Plugin
 
