@@ -1,0 +1,20 @@
+{
+    "name": "Websink Dev Container",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "options": [ "--platform=linux/arm64" ]
+    },
+    "customizations": {
+        "vscode": {
+            "settings": {},
+            "extensions": []
+        }
+    },
+    // "mounts": [
+    //    "source=${localEnv:HOME}/.ssh,target=/home/dev/.ssh,type=bind",
+    //     "source=${localEnv:HOME}/.gitconfig,target=/home/dev/.gitconfig,type=bind",
+    //     "source=${localWorkspaceFolder}/.vscode/.bash_history,target=/home/dev/.bash_history,type=bind",
+    //     "source=/etc/inputrc,target=/etc/inputrc,type=bind"
+    // ],
+    // "remoteUser": "dev"
+}
