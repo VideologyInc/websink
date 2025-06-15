@@ -67,3 +67,27 @@ import_library = false
 
 [package.metadata.capi.pkg_config]
 requires_private = "gstreamer-1.0, gstreamer-base-1.0, gstreamer-video-1.0, gobject-2.0, glib-2.0, gmodule-2.0"
+
+[target.aarch64-unknown-linux-gnu]
+# linker = "aarch64-linux-gnu-gcc"
+linker = "/work/share/scailx_sdk/sysroots/x86_64-pokysdk-linux/usr/bin/aarch64-poky-linux/aarch64-poky-linux-gcc"
+ar     = "/work/share/scailx_sdk/sysroots/x86_64-pokysdk-linux/usr/bin/aarch64-poky-linux/aarch64-poky-linux-ar"
+rustflags = [
+    "-C", "link-arg=-march=armv8-a+crc+crypto",
+    "-C", "link-arg=-mbranch-protection=standard",
+    "-C", "link-arg=-fstack-protector-strong ",
+    "-C", "link-arg=-O2",
+    "-C", "link-arg=-D_FORTIFY_SOURCE=2",
+    "-C", "link-arg=-Wformat",
+    "-C", "link-arg=-Wformat-security",
+    "-C", "link-arg=-Werror=format-security",
+    "-C", "link-arg=--sysroot=/work/share/scailx_sdk/sysroots/armv8a-poky-linux",
+    "-C", "link-arg=-Wl,-rpath-link,/work/share/scailx_sdk/sysroots/armv8a-poky-linux/usr/lib"
+]
+
+[workspace.metadata.cross.target.aarch64-unknown-linux-gnu]
+# Install libssl-dev:arm64, see <https://github.com/cross-rs/cross/blob/main/docs/custom_images.md#adding-dependencies-to-existing-images>
+pre-build = [
+    "dpkg --add-architecture $CROSS_DEB_ARCH",
+    "apt-get update && apt-get --assume-yes install libglib-dev:$CROSS_DEB_ARCH"
+]
