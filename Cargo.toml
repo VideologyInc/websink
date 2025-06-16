@@ -46,8 +46,8 @@ gst-plugin-version-helper = "0.8.2"
 opt-level = 'z'     # Optimize for size
 lto = true          # Enable link-time optimization
 codegen-units = 3   # Reduce number of codegen units to increase optimizations
-panic = 'abort'     # Abort on panic
-strip = true        # Strip symbols from binary*
+# panic = 'abort'     # Abort on panic
+# strip = true        # Strip symbols from binary*
 
 [features]
 # GStreamer 1.22 or later is required for static linking
@@ -68,26 +68,3 @@ import_library = false
 [package.metadata.capi.pkg_config]
 requires_private = "gstreamer-1.0, gstreamer-base-1.0, gstreamer-video-1.0, gobject-2.0, glib-2.0, gmodule-2.0"
 
-[target.aarch64-unknown-linux-gnu]
-# linker = "aarch64-linux-gnu-gcc"
-linker = "/work/shared/scailx_0.11_sdk/sysroots/x86_64-pokysdk-linux/usr/bin/aarch64-poky-linux/aarch64-poky-linux-gcc"
-ar     = "/work/shared/scailx_0.11_sdk/sysroots/x86_64-pokysdk-linux/usr/bin/aarch64-poky-linux/aarch64-poky-linux-ar"
-rustflags = [
-    "-C", "link-arg=-march=armv8-a+crc+crypto",
-    "-C", "link-arg=-mbranch-protection=standard",
-    "-C", "link-arg=-fstack-protector-strong ",
-    "-C", "link-arg=-O2",
-    "-C", "link-arg=-D_FORTIFY_SOURCE=2",
-    "-C", "link-arg=-Wformat",
-    "-C", "link-arg=-Wformat-security",
-    "-C", "link-arg=-Werror=format-security",
-    "-C", "link-arg=--sysroot=/work/shared/scailx_0.11_sdk/sysroots/armv8a-poky-linux",
-    "-C", "link-arg=-Wl,-rpath-link,/work/shared/scailx_0.11_sdk/sysroots/armv8a-poky-linux/usr/lib"
-]
-
-[workspace.metadata.cross.target.aarch64-unknown-linux-gnu]
-# Install libssl-dev:arm64, see <https://github.com/cross-rs/cross/blob/main/docs/custom_images.md#adding-dependencies-to-existing-images>
-pre-build = [
-    "dpkg --add-architecture $CROSS_DEB_ARCH",
-    "apt-get update && apt-get --assume-yes install libglib-dev:$CROSS_DEB_ARCH"
-]
