@@ -61,13 +61,13 @@ fn test_websink_pipeline() {
     webbrowser::open("http://localhost:8087").expect("Failed to open web browser");
 
     // Run for a short time, then send EOS
-    // std::thread::spawn({
-    //     let pipeline = pipeline.clone();
-    //     move || {
-    //         std::thread::sleep(std::time::Duration::from_secs(12));
-    //         pipeline.send_event(gst::event::Eos::new());
-    //     }
-    // });
+    std::thread::spawn({
+        let pipeline = pipeline.clone();
+        move || {
+            std::thread::sleep(std::time::Duration::from_secs(20));
+            pipeline.send_event(gst::event::Eos::new());
+        }
+    });
 
     main_loop.run();
     pipeline.set_state(gst::State::Null).expect("Failed to set pipeline to Null");
