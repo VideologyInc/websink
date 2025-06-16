@@ -70,8 +70,8 @@ requires_private = "gstreamer-1.0, gstreamer-base-1.0, gstreamer-video-1.0, gobj
 
 [target.aarch64-unknown-linux-gnu]
 # linker = "aarch64-linux-gnu-gcc"
-linker = "/work/share/scailx_sdk/sysroots/x86_64-pokysdk-linux/usr/bin/aarch64-poky-linux/aarch64-poky-linux-gcc"
-ar     = "/work/share/scailx_sdk/sysroots/x86_64-pokysdk-linux/usr/bin/aarch64-poky-linux/aarch64-poky-linux-ar"
+linker = "/work/shared/scailx_0.11_sdk/sysroots/x86_64-pokysdk-linux/usr/bin/aarch64-poky-linux/aarch64-poky-linux-gcc"
+ar     = "/work/shared/scailx_0.11_sdk/sysroots/x86_64-pokysdk-linux/usr/bin/aarch64-poky-linux/aarch64-poky-linux-ar"
 rustflags = [
     "-C", "link-arg=-march=armv8-a+crc+crypto",
     "-C", "link-arg=-mbranch-protection=standard",
@@ -81,8 +81,8 @@ rustflags = [
     "-C", "link-arg=-Wformat",
     "-C", "link-arg=-Wformat-security",
     "-C", "link-arg=-Werror=format-security",
-    "-C", "link-arg=--sysroot=/work/share/scailx_sdk/sysroots/armv8a-poky-linux",
-    "-C", "link-arg=-Wl,-rpath-link,/work/share/scailx_sdk/sysroots/armv8a-poky-linux/usr/lib"
+    "-C", "link-arg=--sysroot=/work/shared/scailx_0.11_sdk/sysroots/armv8a-poky-linux",
+    "-C", "link-arg=-Wl,-rpath-link,/work/shared/scailx_0.11_sdk/sysroots/armv8a-poky-linux/usr/lib"
 ]
 
 [workspace.metadata.cross.target.aarch64-unknown-linux-gnu]
