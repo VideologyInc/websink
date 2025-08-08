@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
@@ -27,6 +28,41 @@ const RESET: &str = "\x1b[0m";
 
 // Debug category using the same category from imp.rs
 use crate::websink::imp::CAT;
+
+/// Find an available port, similar to the Go implementation
+/// If start_port is 0, find any available port
+/// Otherwise, try the specified port and increment if not available (up to 100 ports)
+pub fn find_available_port(start_port: u16) -> Result<u16, Box<dyn std::error::Error + Send + Sync>> {
+    // If start_port is 0, find any available port
+    if start_port == 0 {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        drop(listener); // Close the listener
+        return Ok(port);
+    }
+
+    // Otherwise, try the specified port and increment if not available
+    let mut port = start_port;
+    let max_port = std::cmp::min(start_port.saturating_add(100), 65535); // Try up to 100 ports, but don't exceed 65535
+
+    while port <= max_port {
+        match TcpListener::bind(format!("127.0.0.1:{}", port)) {
+            Ok(_listener) => {
+                // Port is available, return it
+                return Ok(port);
+            }
+            Err(_) => {
+                // Port is not available, try the next one
+                if port == 65535 {
+                    break; // Avoid overflow
+                }
+                port += 1;
+            }
+        }
+    }
+
+    Err(format!("No available ports found between {} and {}", start_port, max_port).into())
+}
 
 // Re-export the embedded assets
 #[derive(RustEmbed)]
@@ -187,7 +223,11 @@ pub async fn handle_session_request(
     Ok(response)
 }
 
-pub fn start_http_server(state: Arc<Mutex<State>>, port: u16, rt: &Runtime) -> tokio::task::JoinHandle<()> {
+pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Runtime) -> Result<(tokio::task::JoinHandle<()>, u16), Box<dyn std::error::Error + Send + Sync>> {
+    // Find an available port
+    let port = find_available_port(requested_port)?;
+    gst::info!(CAT, "🔍 Found available port: {} (requested: {})", port, requested_port);
+    
     // Print all relevant addresses as in Go version
     let hostname = get_hostname().ok().and_then(|h| h.into_string().ok()).unwrap_or_else(|| "localhost".to_string());
     let mut external_ip = None;
@@ -214,7 +254,7 @@ pub fn start_http_server(state: Arc<Mutex<State>>, port: u16, rt: &Runtime) -> t
     );
     gst::info!(CAT, "HTTP server starting on http://0.0.0.0:{}", port);
 
-    rt.spawn(async move {
+    let handle = rt.spawn(async move {
         // API session handler - now with actual WebRTC signaling
         let api_session = warp::path!("api" / "session")
             .and(warp::post())
@@ -269,5 +309,7 @@ pub fn start_http_server(state: Arc<Mutex<State>>, port: u16, rt: &Runtime) -> t
 
         warp::serve(routes).run(([0, 0, 0, 0], port)).await;
         gst::info!(CAT, "HTTP server on port {} stopped.", port);
-    })
+    });
+
+    Ok((handle, port))
 }

@@ -257,9 +257,19 @@ impl BaseSinkImpl for WebSink {
         // Start HTTP server
         gst::info!(CAT, "🌐 Starting HTTP server on port {}", port);
         let rt = state.runtime.as_ref().expect("Runtime should be initialized");
-        let server_handle = self.start_http_server(port, rt);
-
-        state.server_handle = Some(server_handle);
+        match self.start_http_server(port, rt) {
+            Ok((server_handle, actual_port)) => {
+                gst::info!(CAT, "✅ HTTP server started successfully on port {}", actual_port);
+                state.server_handle = Some(server_handle);
+                // Store the actual port used for future reference if needed
+                drop(state);
+            }
+            Err(err) => {
+                gst::error!(CAT, "❌ Failed to start HTTP server: {}", err);
+                drop(state);
+                return Err(gst::error_msg!(gst::ResourceError::Failed, ["Failed to start HTTP server: {}", err]));
+            }
+        }
         gst::info!(CAT, "✅ WebSink started successfully");
 
         Ok(())
@@ -371,7 +381,7 @@ impl BaseSinkImpl for WebSink {
 }
 
 impl WebSink {
-    fn start_http_server(&self, port: u16, rt: &Runtime) -> tokio::task::JoinHandle<()> {
+    fn start_http_server(&self, port: u16, rt: &Runtime) -> Result<(tokio::task::JoinHandle<()>, u16), Box<dyn std::error::Error + Send + Sync>> {
         gst::info!(CAT, "Starting HTTP server on port {}", port);
 
         // Clone the state Arc to move into the async block
