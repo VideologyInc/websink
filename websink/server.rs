@@ -323,7 +323,7 @@ async fn handle_session_request_http(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // For simplicity, parse a minimal JSON body
     // In a real implementation, you'd want proper body parsing
-    let body = r#"{"offer": {}}"#; // Placeholder - tiny_http body reading is more complex
+    let _body = r#"{"offer": {}}"#; // Placeholder - tiny_http body reading is more complex
     
     // Create a dummy session request for now
     let session_request = SessionRequest {
