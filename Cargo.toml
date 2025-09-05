@@ -12,6 +12,9 @@ name = "websink"
 crate-type = ["cdylib", "rlib"]
 path = "lib.rs"
 
+[[bin]]
+name = "integration-example"
+path = "main.rs"
 
 [dependencies]
 gst = { package = "gstreamer", version = "0.23.6" }
