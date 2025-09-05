@@ -240,7 +240,7 @@ pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Run
     // Find an available port
     let port = find_available_port(requested_port)?;
     gst::info!(CAT, "🔍 Found available port: {} (requested: {})", port, requested_port);
-    
+
     // Print all relevant addresses as in Go version
     let hostname = get_hostname().ok().and_then(|h| h.into_string().ok()).unwrap_or_else(|| "localhost".to_string());
     let mut external_ip = None;
@@ -275,7 +275,7 @@ pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Run
                 return;
             }
         };
-        
+
         gst::info!(CAT, "HTTP server started successfully on port {}", port);
 
         // Handle each request in a blocking manner since tiny_http is synchronous
@@ -283,7 +283,7 @@ pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Run
         std::thread::spawn(move || {
             for request in server.incoming_requests() {
                 let state_clone = Arc::clone(&state);
-                
+
                 match request.method() {
                     Method::Post => {
                         if request.url() == "/api/session" {
@@ -318,18 +318,19 @@ pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Run
 }
 
 async fn handle_session_request_http(
-    request: tiny_http::Request,
+    mut request: tiny_http::Request,
     state: Arc<Mutex<State>>
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // For simplicity, parse a minimal JSON body
-    // In a real implementation, you'd want proper body parsing
-    let _body = r#"{"offer": {}}"#; // Placeholder - tiny_http body reading is more complex
-    
+    let mut body = String::new();
+    request.as_reader().read_to_string(&mut body)?;
+
     // Create a dummy session request for now
+    let body_json: serde_json::Value = serde_json::from_str(&body).unwrap();
     let session_request = SessionRequest {
-        offer: serde_json::json!({}),
+        offer: body_json["offer"].clone()
     };
-    
+
     gst::info!(CAT, "🔗 Received WebRTC session request");
 
     match handle_session_request(session_request, state).await {
@@ -346,7 +347,7 @@ async fn handle_session_request_http(
             request.respond(error_response).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
         }
     }
-    
+
     Ok(())
 }
 
@@ -366,7 +367,7 @@ fn handle_static_asset(request: tiny_http::Request) {
             let data: &[u8] = &content.data;
             gst::debug!(CAT, "✅ Serving static asset: {} ({} bytes, mime: {})",
                        path_to_serve, data.len(), mime.as_ref());
-            
+
             let response = Response::from_data(data)
                 .with_header(Header::from_bytes(&b"Content-Type"[..], mime.as_ref().as_bytes()).unwrap());
             let _ = request.respond(response);

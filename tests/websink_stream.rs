@@ -5,6 +5,7 @@ use gst::prelude::*;
 use std::sync::{Arc, Mutex};
 use gst::glib;
 use websink::websink::WebSink;
+use webbrowser;
 
 #[test]
 fn test_websink_pipeline() {
@@ -34,7 +35,6 @@ fn test_websink_pipeline() {
 
     let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
 
-    let main_loop_cloned = main_loop.clone();
     let bus = pipeline.bus().unwrap();
     let errors = Arc::new(Mutex::new(Vec::new()));
     let errors_clone = errors.clone();
