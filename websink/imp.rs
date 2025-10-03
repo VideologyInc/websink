@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
-use webrtc::api::media_engine::MIME_TYPE_H264;
+use webrtc::api::media_engine::{MIME_TYPE_H264, MIME_TYPE_HEVC};
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
@@ -30,6 +30,43 @@ pub static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
         Some("webrtc streaming sink element"),
     )
 });
+
+// Video codec enumeration for multi-codec support
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoCodec {
+    H264,
+    H265,
+}
+
+impl VideoCodec {
+    /// Get the MIME type for WebRTC
+    pub fn mime_type(&self) -> &'static str {
+        match self {
+            VideoCodec::H264 => MIME_TYPE_H264,
+            VideoCodec::H265 => MIME_TYPE_HEVC,
+        }
+    }
+
+    /// Detect codec from GStreamer caps
+    pub fn from_caps(caps: &gst::Caps) -> Option<Self> {
+        let structure = caps.structure(0)?;
+        let name = structure.name();
+        
+        match name.as_str() {
+            "video/x-h264" => Some(VideoCodec::H264),
+            "video/x-h265" => Some(VideoCodec::H265),
+            _ => None,
+        }
+    }
+
+    /// Get human-readable codec name
+    pub fn name(&self) -> &'static str {
+        match self {
+            VideoCodec::H264 => "H.264",
+            VideoCodec::H265 => "H.265/HEVC",
+        }
+    }
+}
 
 // Default values for properties
 const DEFAULT_PORT: u16 = 8091;
@@ -165,7 +202,7 @@ impl ElementImpl for WebSink {
             gst::subclass::ElementMetadata::new(
                 "WebRTC Sink",
                 "Sink/Network",
-                "Stream H264 video to web browsers using WebRTC",
+                "Stream H.264/H.265 video to web browsers using WebRTC with automatic codec negotiation",
                 "Videology Inc <info@videology.com>",
             )
         });
@@ -176,16 +213,26 @@ impl ElementImpl for WebSink {
     fn pad_templates() -> &'static [gst::PadTemplate] {
         use once_cell::sync::Lazy;
         static PAD_TEMPLATES: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
-            let caps = gst::Caps::builder("video/x-h264")
+            // Create caps for both H.264 and H.265
+            let h264_caps = gst::Caps::builder("video/x-h264")
                 .field("stream-format", "byte-stream")
                 .field("alignment", "au")
                 .build();
+
+            let h265_caps = gst::Caps::builder("video/x-h265")
+                .field("stream-format", "byte-stream")
+                .field("alignment", "au")
+                .build();
+
+            // Combine both caps using gst::Caps::merge
+            let mut combined_caps = h264_caps;
+            combined_caps.merge(h265_caps);
 
             let sink_pad_template = gst::PadTemplate::new(
                 "sink",
                 gst::PadDirection::Sink,
                 gst::PadPresence::Always,
-                &caps,
+                &combined_caps,
             )
             .unwrap();
 
@@ -198,6 +245,27 @@ impl ElementImpl for WebSink {
 
 // Implementation of BaseSink methods
 impl BaseSinkImpl for WebSink {
+    fn set_caps(&self, caps: &gst::Caps) -> Result<(), gst::LoggableError> {
+        gst::info!(CAT, "🎯 Setting caps: {}", caps);
+
+        // Detect codec from caps
+        let codec = VideoCodec::from_caps(caps)
+            .ok_or_else(|| {
+                gst::loggable_error!(CAT, "Unsupported video format in caps: {}", caps)
+            })?;
+
+        gst::info!(CAT, "🎥 Detected codec: {}", codec.name());
+
+        // Create or update video track if we have a runtime
+        let state_guard = self.state.lock().unwrap();
+        if state_guard.runtime.is_some() {
+            drop(state_guard);
+            self.create_video_track_for_codec(codec)?;
+        }
+
+        Ok(())
+    }
+
     fn start(&self) -> Result<(), gst::ErrorMessage> {
         gst::info!(CAT, "🚀 Starting WebSink");
 
@@ -220,17 +288,8 @@ impl BaseSinkImpl for WebSink {
 
         gst::info!(CAT, "✅ WebRTC components will be initialized per session");
 
-        // Create video track
-        gst::debug!(CAT, "🎥 Creating video track for H.264");
-        let video_track = Arc::new(TrackLocalStaticSample::new(
-            RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_H264.to_owned(),
-                ..Default::default()
-            },
-            "video".to_owned(),
-            "websink".to_owned(),
-        ));
-        gst::info!(CAT, "✅ Video track created successfully");
+        // Note: Video track will be created in set_caps when codec is detected
+        gst::debug!(CAT, "📋 Video track will be created when codec is detected from caps");
 
         // Configure WebRTC
         let settings = self.settings.lock().unwrap();
@@ -251,7 +310,6 @@ impl BaseSinkImpl for WebSink {
         state.runtime = Some(runtime);
         state.unblock_tx = Some(tx);
         state.unblock_rx = Some(rx);
-        state.video_track = Some(video_track);
         state.webrtc_config = Some(webrtc_config);
 
         // Start HTTP server
@@ -381,6 +439,28 @@ impl BaseSinkImpl for WebSink {
 }
 
 impl WebSink {
+    /// Create video track for the specified codec
+    fn create_video_track_for_codec(&self, codec: VideoCodec) -> Result<(), gst::LoggableError> {
+        gst::debug!(CAT, "🎥 Creating video track for {}", codec.name());
+        
+        let video_track = Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability {
+                mime_type: codec.mime_type().to_owned(),
+                ..Default::default()
+            },
+            "video".to_owned(),
+            "websink".to_owned(),
+        ));
+        
+        gst::info!(CAT, "✅ Video track created successfully for {}", codec.name());
+
+        // Store the video track in state
+        let mut state = self.state.lock().unwrap();
+        state.video_track = Some(video_track);
+        
+        Ok(())
+    }
+
     fn start_http_server(&self, port: u16, rt: &Runtime) -> Result<(tokio::task::JoinHandle<()>, u16), Box<dyn std::error::Error + Send + Sync>> {
         gst::info!(CAT, "Starting HTTP server on port {}", port);
 

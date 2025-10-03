@@ -5,6 +5,7 @@ use gst::prelude::*;
 use std::sync::{Arc, Mutex};
 use gst::glib;
 use websink::websink::WebSink;
+use webbrowser;
 
 #[test]
 fn test_websink_pipeline() {
@@ -20,11 +21,12 @@ fn test_websink_pipeline() {
     // Register the WebSink element with GStreamer
     gst::Element::register(None, "websink", gst::Rank::NONE, WebSink::static_type()).unwrap();
 
-    let main_loop = glib::MainLoop::new(None, false);
+    // let main_loop = glib::MainLoop::new(None, false);
 
     // Start stream
 
-    let pls = "videotestsrc is-live=true ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! x264enc tune=zerolatency ! websink name=wsink port=8087";
+    let pls = "videotestsrc is-live=true ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! nvh265enc ! websink name=wsink port=8087";
+    // let pls = "videotestsrc is-live=true ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! x264enc tune=zerolatency ! websink name=wsink port=8087";
     let pipeline = gst::parse::launch(pls).unwrap();
     let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
 
@@ -34,7 +36,6 @@ fn test_websink_pipeline() {
 
     let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
 
-    let main_loop_cloned = main_loop.clone();
     let bus = pipeline.bus().unwrap();
     let errors = Arc::new(Mutex::new(Vec::new()));
     let errors_clone = errors.clone();

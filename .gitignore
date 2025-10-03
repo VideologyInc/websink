@@ -50,3 +50,4 @@ zzgenerated*
 *.h
 gstshark*
 target/
+tests/chrome_screenshot.png
