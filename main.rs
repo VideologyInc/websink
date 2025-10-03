@@ -1,5 +1,5 @@
-use gst::prelude::*;
 use gst::glib;
+use gst::prelude::*;
 mod websink;
 // Import the plugin's registration function.
 // Assuming the library target is named `websink` as per Cargo.toml
@@ -31,14 +31,11 @@ fn main() {
 }
 
 fn start(main_loop: &glib::MainLoop) -> Result<(), Box<dyn std::error::Error>> {
-
     let pls = "videotestsrc is-live=true ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! x264enc tune=zerolatency ! websink name=wsink";
     let pipeline = gst::parse::launch(pls).unwrap();
     let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
 
-    pipeline
-        .set_state(gst::State::Playing)
-        .expect("Failed to set pipeline to `Playing`");
+    pipeline.set_state(gst::State::Playing).expect("Failed to set pipeline to `Playing`");
 
     let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
 
@@ -54,12 +51,7 @@ fn start(main_loop: &glib::MainLoop) -> Result<(), Box<dyn std::error::Error>> {
                     main_loop_cloned.quit();
                 }
                 MessageView::Error(err) => {
-                    println!(
-                        "Error from {:?}: {} ({:?})",
-                        err.src().map(|s| s.path_string()),
-                        err.error(),
-                        err.debug()
-                    );
+                    println!("Error from {:?}: {} ({:?})", err.src().map(|s| s.path_string()), err.error(), err.debug());
                 }
                 _ => (),
             };
@@ -68,9 +60,7 @@ fn start(main_loop: &glib::MainLoop) -> Result<(), Box<dyn std::error::Error>> {
         .expect("failed to add bus watch");
 
     main_loop.run();
-    pipeline
-        .set_state(gst::State::Null)
-        .expect("Failed to set pipeline to `Null`");
+    pipeline.set_state(gst::State::Null).expect("Failed to set pipeline to `Null`");
     println!("Done");
     Ok(())
 }

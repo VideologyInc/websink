@@ -1,11 +1,11 @@
 // Integration test for the WebSink GStreamer plugin
 // This test launches a pipeline similar to the main app and checks for errors.
 
+use gst::glib;
 use gst::prelude::*;
 use std::sync::{Arc, Mutex};
-use gst::glib;
-use websink::websink::WebSink;
 use webbrowser;
+use websink::websink::WebSink;
 
 #[test]
 fn test_websink_pipeline() {
@@ -30,9 +30,7 @@ fn test_websink_pipeline() {
     let pipeline = gst::parse::launch(pls).unwrap();
     let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
 
-    pipeline
-        .set_state(gst::State::Playing)
-        .expect("Failed to set pipeline to `Playing`");
+    pipeline.set_state(gst::State::Playing).expect("Failed to set pipeline to `Playing`");
 
     let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
 
@@ -42,21 +40,23 @@ fn test_websink_pipeline() {
     let main_loop = glib::MainLoop::new(None, false);
     let main_loop_clone = main_loop.clone();
 
-    let _bus_watch = bus.add_watch(move |_, msg| {
-        use gst::MessageView;
-        match msg.view() {
-            MessageView::Eos(..) => {
-                main_loop_clone.quit();
+    let _bus_watch = bus
+        .add_watch(move |_, msg| {
+            use gst::MessageView;
+            match msg.view() {
+                MessageView::Eos(..) => {
+                    main_loop_clone.quit();
+                }
+                MessageView::Error(err) => {
+                    let mut errors = errors_clone.lock().unwrap();
+                    errors.push(format!("Error from {:?}: {} ({:?})", err.src().map(|s| s.path_string()), err.error(), err.debug()));
+                    main_loop_clone.quit();
+                }
+                _ => (),
             }
-            MessageView::Error(err) => {
-                let mut errors = errors_clone.lock().unwrap();
-                errors.push(format!("Error from {:?}: {} ({:?})", err.src().map(|s| s.path_string()), err.error(), err.debug()));
-                main_loop_clone.quit();
-            }
-            _ => (),
-        }
-        glib::ControlFlow::Continue
-    }).expect("failed to add bus watch");
+            glib::ControlFlow::Continue
+        })
+        .expect("failed to add bus watch");
 
     // Open browser to the URL where your app is running
     webbrowser::open("http://localhost:8087").expect("Failed to open web browser");

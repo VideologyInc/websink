@@ -1,18 +1,18 @@
+use get_if_addrs::get_if_addrs;
+use hostname::get as get_hostname;
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
+use tiny_http::{Header, Method, Response, Server};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use tiny_http::{Server, Method, Response, Header};
-use rust_embed::RustEmbed;
-use hostname::get as get_hostname;
-use get_if_addrs::get_if_addrs;
 
 // WebRTC imports
 use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::{MediaEngine};
+use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::APIBuilder;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
@@ -62,17 +62,15 @@ pub struct State {
 // Handle WebRTC session request (create peer connection and answer)
 pub async fn handle_session_request(
     req: SessionRequest,
-    state: Arc<Mutex<State>>
+    state: Arc<Mutex<State>>,
 ) -> Result<SessionResponse, Box<dyn std::error::Error + Send + Sync>> {
     gst::info!(CAT, "🎯 Processing WebRTC session request");
 
     // Get the shared video track and config from state
     let (webrtc_config, video_track) = {
         let state_guard = state.lock().unwrap();
-        let config = state_guard.webrtc_config.clone()
-            .ok_or("WebRTC config not initialized")?;
-        let track = state_guard.video_track.clone()
-            .ok_or("Video track not initialized")?;
+        let config = state_guard.webrtc_config.clone().ok_or("WebRTC config not initialized")?;
+        let track = state_guard.video_track.clone().ok_or("Video track not initialized")?;
         (config, track)
     };
 
@@ -87,18 +85,13 @@ pub async fn handle_session_request(
     let mut registry = Registry::new();
     registry = register_default_interceptors(registry, &mut m)?;
 
-    let api = APIBuilder::new()
-        .with_media_engine(m)
-        .with_interceptor_registry(registry)
-        .build();
+    let api = APIBuilder::new().with_media_engine(m).with_interceptor_registry(registry).build();
 
     // Create a new peer connection using the API and shared config
     let peer_connection = Arc::new(api.new_peer_connection(webrtc_config).await?);
     gst::info!(CAT, "📞 Created new peer connection");
 
-    let _rtp_sender = peer_connection
-        .add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>)
-        .await?;
+    let _rtp_sender = peer_connection.add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>).await?;
     gst::info!(CAT, "🎥 Added video track to peer connection");
 
     // Parse the offer from the request
@@ -116,7 +109,10 @@ pub async fn handle_session_request(
     // Set local description
     peer_connection.set_local_description(answer).await.map_err(|e| {
         if e.to_string().contains("codec is not supported") {
-            gst::error!(CAT, "❌ It seems the codec is not supported by the browser. Ensure your GStreamer pipeline uses H.264 or H.265 codec.");
+            gst::error!(
+                CAT,
+                "❌ It seems the codec is not supported by the browser. Ensure your GStreamer pipeline uses H.264 or H.265 codec."
+            );
             let return_error_string = format!("Server is sending {}. Codec is not supported by browser.", actual_codec.to_uppercase());
             // Return a string error
             return Box::<dyn std::error::Error + Send + Sync>::from(return_error_string);
@@ -132,8 +128,7 @@ pub async fn handle_session_request(
     gst::info!(CAT, "🧊 ICE gathering completed");
 
     // Get the final answer with ICE candidates
-    let final_answer = peer_connection.local_description().await
-        .ok_or("Failed to get local description")?;
+    let final_answer = peer_connection.local_description().await.ok_or("Failed to get local description")?;
 
     // Generate session ID
     let session_id = Uuid::new_v4().to_string();
@@ -158,9 +153,7 @@ pub async fn handle_session_request(
         gst::debug!(CAT, "🔄 Peer connection state changed to: {:?} for session {}", s, session_id_clone);
         let mut state_guard = state_clone.lock().unwrap();
         match s {
-            RTCPeerConnectionState::Disconnected |
-            RTCPeerConnectionState::Failed |
-            RTCPeerConnectionState::Closed => {
+            RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
                 gst::info!(CAT, "🔌 Peer disconnected, removing session: {}", session_id_clone);
                 state_guard.peer_connections.remove(&session_id_clone);
                 // Update peer count and send notification
@@ -168,10 +161,10 @@ pub async fn handle_session_request(
                     let _ = tx.try_send(state_guard.peer_connections.len() as i32);
                 }
                 gst::info!(CAT, "📊 Updated peer count to: {}", state_guard.peer_connections.len() as i32);
-            },
+            }
             RTCPeerConnectionState::Connected => {
                 gst::debug!(CAT, "🕼 Peer connected successfully: {}, num peers: {}", session_id_clone, state_guard.peer_connections.len());
-            },
+            }
             _ => {
                 gst::debug!(CAT, "🔄 Peer connection state: {:?}", s);
             }
@@ -183,11 +176,7 @@ pub async fn handle_session_request(
     // Serialize answer to JSON
     let answer_json = serde_json::to_value(&final_answer)?;
 
-    let response = SessionResponse {
-        answer: answer_json,
-        session_id: session_id.clone(),
-        negotiated_codec: Some(actual_codec.clone()),
-    };
+    let response = SessionResponse { answer: answer_json, session_id: session_id.clone(), negotiated_codec: Some(actual_codec.clone()) };
 
     gst::info!(CAT, "✅ WebRTC session established with ID: {} using codec: {}", session_id, actual_codec);
     Ok(response)
@@ -202,7 +191,11 @@ fn next_free_port(mut port: u16) -> u16 {
     }
 }
 
-pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Runtime) -> Result<(tokio::task::JoinHandle<()>, u16), Box<dyn std::error::Error + Send + Sync>> {
+pub fn start_http_server(
+    state: Arc<Mutex<State>>,
+    requested_port: u16,
+    rt: &Runtime,
+) -> Result<(tokio::task::JoinHandle<()>, u16), Box<dyn std::error::Error + Send + Sync>> {
     // Find an available port
     let port = next_free_port(requested_port);
     gst::info!(CAT, "🔍 Found available port: {} (requested: {})", port, requested_port);
@@ -225,7 +218,11 @@ pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Run
     let ext_ip = external_ip.unwrap_or_else(|| "localhost".to_string());
     println!(
         "{green}HTTP server started at http://{host}.local:{port} and http://{ip}:{port}{reset}",
-        green=GREEN, host=hostname, port=port_str, ip=ext_ip, reset=RESET
+        green = GREEN,
+        host = hostname,
+        port = port_str,
+        ip = ext_ip,
+        reset = RESET
     );
 
     let handle = rt.spawn(async move {
@@ -247,9 +244,7 @@ pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Run
                     Method::Post => {
                         if request.url() == "/api/session" {
                             // Handle WebRTC session request - spawn async task
-                            let request_result = rt_handle.block_on(async {
-                                handle_session_request_http(request, state_clone).await
-                            });
+                            let request_result = rt_handle.block_on(async { handle_session_request_http(request, state_clone).await });
                             if let Err(e) = request_result {
                                 gst::error!(CAT, "Failed to handle session request: {}", e);
                             }
@@ -276,16 +271,17 @@ pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Run
     Ok((handle, port))
 }
 
-async fn handle_session_request_http(mut request: tiny_http::Request, state: Arc<Mutex<State>>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn handle_session_request_http(
+    mut request: tiny_http::Request,
+    state: Arc<Mutex<State>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // For simplicity, parse a minimal JSON body
     let mut body = String::new();
     request.as_reader().read_to_string(&mut body)?;
 
     // Parse the session request from JSON
     let body_json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let session_request = SessionRequest {
-        offer: body_json["offer"].clone(),
-    };
+    let session_request = SessionRequest { offer: body_json["offer"].clone() };
 
     gst::info!(CAT, "🔗 Received WebRTC session request");
 
@@ -296,7 +292,7 @@ async fn handle_session_request_http(mut request: tiny_http::Request, state: Arc
             let http_response = Response::from_string(response_json)
                 .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
             request.respond(http_response).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-        },
+        }
         Err(e) => {
             gst::error!(CAT, "❌ Failed to handle WebRTC session request: {}", e);
             let error_response = Response::from_string(e.to_string()).with_status_code(500);
@@ -321,11 +317,10 @@ fn handle_static_asset(request: tiny_http::Request) {
         Some(content) => {
             let mime = mime_guess::from_path(path_to_serve).first_or_octet_stream();
             let data: &[u8] = &content.data;
-            gst::debug!(CAT, "✅ Serving static asset: {} ({} bytes, mime: {})",
-                       path_to_serve, data.len(), mime.as_ref());
+            gst::debug!(CAT, "✅ Serving static asset: {} ({} bytes, mime: {})", path_to_serve, data.len(), mime.as_ref());
 
-            let response = Response::from_data(data)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], mime.as_ref().as_bytes()).unwrap());
+            let response =
+                Response::from_data(data).with_header(Header::from_bytes(&b"Content-Type"[..], mime.as_ref().as_bytes()).unwrap());
             let _ = request.respond(response);
         }
         None => {

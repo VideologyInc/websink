@@ -3,33 +3,27 @@ use gst::prelude::*;
 use gst::subclass::prelude::*;
 use gst_base::subclass::prelude::*;
 
-use std::sync::atomic::{ AtomicU32, Ordering };
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::LazyLock;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use bytes;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use webrtc::api::media_engine::{MIME_TYPE_H264, MIME_TYPE_HEVC};
 use webrtc::ice_transport::ice_server::RTCIceServer;
+use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
-use webrtc::media::Sample;
-use bytes;
 
 // Import from our server module
 use crate::websink::server;
 
 // Debug category for the WebSink element
-pub static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
-    gst::DebugCategory::new(
-        "websink",
-        gst::DebugColorFlags::empty(),
-
-        Some("webrtc streaming sink element"),
-    )
-});
+pub static CAT: LazyLock<gst::DebugCategory> =
+    LazyLock::new(|| gst::DebugCategory::new("websink", gst::DebugColorFlags::empty(), Some("webrtc streaming sink element")));
 
 // Video codec enumeration for multi-codec support
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,7 +45,7 @@ impl VideoCodec {
     pub fn from_caps(caps: &gst::Caps) -> Option<Self> {
         let structure = caps.structure(0)?;
         let name = structure.name();
-        
+
         match name.as_str() {
             "video/x-h264" => Some(VideoCodec::H264),
             "video/x-h265" => Some(VideoCodec::H265),
@@ -82,11 +76,7 @@ struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self {
-            port: DEFAULT_PORT,
-            stun_server: String::from(DEFAULT_STUN_SERVER),
-            is_live: false,
-        }
+        Self { port: DEFAULT_PORT, stun_server: String::from(DEFAULT_STUN_SERVER), is_live: false }
     }
 }
 
@@ -103,11 +93,7 @@ pub struct WebSink {
 // Default implementation for our element
 impl Default for WebSink {
     fn default() -> Self {
-        Self {
-            settings: Mutex::new(Settings::default()),
-            state: Arc::new(Mutex::new(State::default())),
-            render_count: AtomicU32::new(0),
-        }
+        Self { settings: Mutex::new(Settings::default()), state: Arc::new(Mutex::new(State::default())), render_count: AtomicU32::new(0) }
     }
 }
 
@@ -158,14 +144,15 @@ impl ObjectImpl for WebSink {
             }
             "stun-server" => {
                 let mut settings = self.settings.lock().unwrap();
-                let stun_server = value.get::<Option<String>>().expect("type checked upstream").unwrap_or_else(|| DEFAULT_STUN_SERVER.to_string());
+                let stun_server =
+                    value.get::<Option<String>>().expect("type checked upstream").unwrap_or_else(|| DEFAULT_STUN_SERVER.to_string());
                 gst::info!(CAT, "Changing stun-server from {} to {}", settings.stun_server, stun_server);
                 settings.stun_server = stun_server;
             }
             "is-live" => {
                 let mut settings = self.settings.lock().unwrap();
                 let is_live = value.get::<bool>().expect("type checked upstream");
-                gst::info!( CAT, "Changing is-live from {} to {}", settings.is_live, is_live);
+                gst::info!(CAT, "Changing is-live from {} to {}", settings.is_live, is_live);
                 settings.is_live = is_live;
             }
             _ => unimplemented!(),
@@ -214,27 +201,15 @@ impl ElementImpl for WebSink {
         use once_cell::sync::Lazy;
         static PAD_TEMPLATES: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
             // Create caps for both H.264 and H.265
-            let h264_caps = gst::Caps::builder("video/x-h264")
-                .field("stream-format", "byte-stream")
-                .field("alignment", "au")
-                .build();
-
-            let h265_caps = gst::Caps::builder("video/x-h265")
-                .field("stream-format", "byte-stream")
-                .field("alignment", "au")
-                .build();
+            let h264_caps = gst::Caps::builder("video/x-h264").field("stream-format", "byte-stream").field("alignment", "au").build();
+            let h265_caps = gst::Caps::builder("video/x-h265").field("stream-format", "byte-stream").field("alignment", "au").build();
 
             // Combine both caps using gst::Caps::merge
             let mut combined_caps = h264_caps;
             combined_caps.merge(h265_caps);
 
-            let sink_pad_template = gst::PadTemplate::new(
-                "sink",
-                gst::PadDirection::Sink,
-                gst::PadPresence::Always,
-                &combined_caps,
-            )
-            .unwrap();
+            let sink_pad_template =
+                gst::PadTemplate::new("sink", gst::PadDirection::Sink, gst::PadPresence::Always, &combined_caps).unwrap();
 
             vec![sink_pad_template]
         });
@@ -249,10 +224,7 @@ impl BaseSinkImpl for WebSink {
         gst::info!(CAT, "🎯 Setting caps: {}", caps);
 
         // Detect codec from caps
-        let codec = VideoCodec::from_caps(caps)
-            .ok_or_else(|| {
-                gst::loggable_error!(CAT, "Unsupported video format in caps: {}", caps)
-            })?;
+        let codec = VideoCodec::from_caps(caps).ok_or_else(|| gst::loggable_error!(CAT, "Unsupported video format in caps: {}", caps))?;
 
         gst::info!(CAT, "🎥 Detected codec: {}", codec.name());
 
@@ -275,7 +247,7 @@ impl BaseSinkImpl for WebSink {
             Ok(rt) => {
                 gst::info!(CAT, "✅ Tokio runtime created successfully");
                 rt
-            },
+            }
             Err(err) => {
                 gst::error!(CAT, "❌ Failed to create Tokio runtime: {}", err);
                 return Err(gst::error_msg!(gst::ResourceError::Failed, ["Failed to create Tokio runtime: {}", err]));
@@ -295,10 +267,7 @@ impl BaseSinkImpl for WebSink {
         let settings = self.settings.lock().unwrap();
         let mut webrtc_config = RTCConfiguration::default();
         if !settings.stun_server.is_empty() {
-            webrtc_config.ice_servers = vec![RTCIceServer {
-                urls: vec![settings.stun_server.clone()],
-                ..Default::default()
-            }];
+            webrtc_config.ice_servers = vec![RTCIceServer { urls: vec![settings.stun_server.clone()], ..Default::default() }];
             gst::info!(CAT, "🌐 STUN server configured: {}", settings.stun_server);
         } else {
             gst::info!(CAT, "⚠️ No STUN server configured");
@@ -384,7 +353,9 @@ impl BaseSinkImpl for WebSink {
 
         // In live mode, we skip rendering if no peers are connected
         if is_live && num_peers == 0 {
-            if (render_count % 600) == 0 { gst::trace!(CAT, "⏭️ No peers connected in live mode, skipping buffer");}
+            if (render_count % 600) == 0 {
+                gst::trace!(CAT, "⏭️ No peers connected in live mode, skipping buffer");
+            }
             return Ok(gst::FlowSuccess::Ok);
         }
 
@@ -404,16 +375,14 @@ impl BaseSinkImpl for WebSink {
                 let data_copy = bytes::Bytes::copy_from_slice(data);
                 let duration = buffer.duration().unwrap_or_else(|| gst::ClockTime::from_nseconds(33_333_333)); // Default 30fps
 
-                if (render_count % 100) == 0 { gst::trace!(CAT, "⏱️ Buffer duration: {} ns", duration.nseconds()); }
+                if (render_count % 100) == 0 {
+                    gst::trace!(CAT, "⏱️ Buffer duration: {} ns", duration.nseconds());
+                }
 
                 // Use the runtime to send the sample
                 if let Some(runtime) = &state.runtime {
                     runtime.spawn(async move {
-                        let sample = Sample {
-                            data: data_copy,
-                            duration: Duration::from_nanos(duration.nseconds()),
-                            ..Default::default()
-                        };
+                        let sample = Sample { data: data_copy, duration: Duration::from_nanos(duration.nseconds()), ..Default::default() };
 
                         gst::trace!(CAT, "🚀 Spawned async task to write sample to WebRTC track");
 
@@ -442,26 +411,27 @@ impl WebSink {
     /// Create video track for the specified codec
     fn create_video_track_for_codec(&self, codec: VideoCodec) -> Result<(), gst::LoggableError> {
         gst::debug!(CAT, "🎥 Creating video track for {}", codec.name());
-        
+
         let video_track = Arc::new(TrackLocalStaticSample::new(
-            RTCRtpCodecCapability {
-                mime_type: codec.mime_type().to_owned(),
-                ..Default::default()
-            },
+            RTCRtpCodecCapability { mime_type: codec.mime_type().to_owned(), ..Default::default() },
             "video".to_owned(),
             "websink".to_owned(),
         ));
-        
+
         gst::info!(CAT, "✅ Video track created successfully for {}", codec.name());
 
         // Store the video track in state
         let mut state = self.state.lock().unwrap();
         state.video_track = Some(video_track);
-        
+
         Ok(())
     }
 
-    fn start_http_server(&self, port: u16, rt: &Runtime) -> Result<(tokio::task::JoinHandle<()>, u16), Box<dyn std::error::Error + Send + Sync>> {
+    fn start_http_server(
+        &self,
+        port: u16,
+        rt: &Runtime,
+    ) -> Result<(tokio::task::JoinHandle<()>, u16), Box<dyn std::error::Error + Send + Sync>> {
         gst::info!(CAT, "Starting HTTP server on port {}", port);
 
         // Clone the state Arc to move into the async block

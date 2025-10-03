@@ -1,6 +1,6 @@
 // Test for the port auto-selection functionality
-use websink::websink::server::find_available_port;
 use std::net::TcpListener;
+use websink::websink::server::find_available_port;
 
 #[test]
 fn test_auto_select_any_port() {
@@ -26,11 +26,10 @@ fn test_specific_available_port() {
 fn test_port_in_use_fallback() {
     // Test fallback when the requested port is in use
     let test_port = 9124;
-    
+
     // Bind to the test port to make it unavailable
-    let _listener = TcpListener::bind(format!("127.0.0.1:{}", test_port))
-        .expect("Failed to bind to test port");
-    
+    let _listener = TcpListener::bind(format!("127.0.0.1:{}", test_port)).expect("Failed to bind to test port");
+
     let result = find_available_port(test_port);
     assert!(result.is_ok(), "Should find an alternative port when requested port is in use");
     let port = result.unwrap();
@@ -45,8 +44,8 @@ fn test_no_available_ports_in_range() {
     // This test would be hard to implement reliably without actually blocking many ports
     // For now, just test that the function signature works and errors are properly typed
     let result = find_available_port(65530); // Near the upper limit
-    // We don't assert the result since it depends on system state
-    // but we ensure the function can be called and returns the right type
+                                             // We don't assert the result since it depends on system state
+                                             // but we ensure the function can be called and returns the right type
     match result {
         Ok(port) => println!("Got port {} near upper limit", port),
         Err(e) => println!("Expected error near upper limit: {}", e),
