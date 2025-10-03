@@ -4,7 +4,6 @@
 use gst::glib;
 use gst::prelude::*;
 use std::sync::{Arc, Mutex};
-use webbrowser;
 use websink::websink::WebSink;
 
 #[test]

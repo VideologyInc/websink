@@ -115,9 +115,9 @@ pub async fn handle_session_request(
             );
             let return_error_string = format!("Server is sending {}. Codec is not supported by browser.", actual_codec.to_uppercase());
             // Return a string error
-            return Box::<dyn std::error::Error + Send + Sync>::from(return_error_string);
+            Box::<dyn std::error::Error + Send + Sync>::from(return_error_string)
         } else {
-            return Box::<dyn std::error::Error + Send + Sync>::from(e);
+            Box::<dyn std::error::Error + Send + Sync>::from(e)
         }
     })?;
     gst::info!(CAT, "🏠 Set local description");
