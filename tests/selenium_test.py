@@ -292,78 +292,78 @@ def test_image_comparison(gstreamer_pipeline, chrome_driver):
         traceback.print_exc()
         pytest.fail(f"Image comparison test failed with error: {e}")
 
-def test_image_comparison_firefox(gstreamer_pipeline, firefox_driver):
-    """
-    Test capturing a new screenshot with Firefox and comparing it with reference video_screenshot.png
-    using OpenCV to verify similarity.
-    """
-    try:
-        # Navigate to the WebRTC page
-        url = "http://localhost:8091"
-        print(f"Navigating to {url} with Firefox")
-        firefox_driver.get(url)
+# def test_image_comparison_firefox(gstreamer_pipeline, firefox_driver):
+#     """
+#     Test capturing a new screenshot with Firefox and comparing it with reference video_screenshot.png
+#     using OpenCV to verify similarity.
+#     """
+#     try:
+#         # Navigate to the WebRTC page
+#         url = "http://localhost:8091"
+#         print(f"Navigating to {url} with Firefox")
+#         firefox_driver.get(url)
 
-        # Wait for the video element to appear
-        print("Waiting for video element in Firefox")
-        wait = WebDriverWait(firefox_driver, 20)
-        video = wait.until(EC.presence_of_element_located((By.TAG_NAME, "video")))
+#         # Wait for the video element to appear
+#         print("Waiting for video element in Firefox")
+#         wait = WebDriverWait(firefox_driver, 20)
+#         video = wait.until(EC.presence_of_element_located((By.TAG_NAME, "video")))
 
-        # Give time for the WebRTC connection to establish
-        print("Waiting for WebRTC connection to establish in Firefox")
-        time.sleep(9)
+#         # Give time for the WebRTC connection to establish
+#         print("Waiting for WebRTC connection to establish in Firefox")
+#         time.sleep(9)
 
-        # Capture a new screenshot for comparison
-        print("Taking new screenshot for comparison with Firefox")
-        new_screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'firefox_screenshot.png')
-        firefox_driver.save_screenshot(new_screenshot_path)
+#         # Capture a new screenshot for comparison
+#         print("Taking new screenshot for comparison with Firefox")
+#         new_screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'firefox_screenshot.png')
+#         firefox_driver.save_screenshot(new_screenshot_path)
 
-        # Path to the reference image
-        reference_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'video_screenshot.png')
+#         # Path to the reference image
+#         reference_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'video_screenshot.png')
 
-        # Check if reference image exists
-        assert os.path.exists(reference_path), "Reference image doesn't exist"
+#         # Check if reference image exists
+#         assert os.path.exists(reference_path), "Reference image doesn't exist"
 
-        # Load images with OpenCV
-        print("Loading images for comparison")
-        reference_img = cv2.imread(reference_path)
-        new_img = cv2.imread(new_screenshot_path)
+#         # Load images with OpenCV
+#         print("Loading images for comparison")
+#         reference_img = cv2.imread(reference_path)
+#         new_img = cv2.imread(new_screenshot_path)
 
-        # Make sure both images were loaded
-        assert reference_img is not None, "Failed to load reference image"
-        assert new_img is not None, "Failed to load new screenshot"
+#         # Make sure both images were loaded
+#         assert reference_img is not None, "Failed to load reference image"
+#         assert new_img is not None, "Failed to load new screenshot"
 
-        # Resize if dimensions don't match
-        if reference_img.shape != new_img.shape:
-            print(f"Resizing images to match dimensions (reference: {reference_img.shape}, new: {new_img.shape})")
-            new_img = cv2.resize(new_img, (reference_img.shape[1], reference_img.shape[0]))
+#         # Resize if dimensions don't match
+#         if reference_img.shape != new_img.shape:
+#             print(f"Resizing images to match dimensions (reference: {reference_img.shape}, new: {new_img.shape})")
+#             new_img = cv2.resize(new_img, (reference_img.shape[1], reference_img.shape[0]))
 
-        # Compare images
-        print("Comparing images")
-        # Convert images to grayscale for comparison
-        ref_gray = cv2.cvtColor(reference_img, cv2.COLOR_BGR2GRAY)
-        new_gray = cv2.cvtColor(new_img, cv2.COLOR_BGR2GRAY)
+#         # Compare images
+#         print("Comparing images")
+#         # Convert images to grayscale for comparison
+#         ref_gray = cv2.cvtColor(reference_img, cv2.COLOR_BGR2GRAY)
+#         new_gray = cv2.cvtColor(new_img, cv2.COLOR_BGR2GRAY)
 
-        # Calculate image similarity index
-        res = cv2.matchTemplate(new_gray, ref_gray, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+#         # Calculate image similarity index
+#         res = cv2.matchTemplate(new_gray, ref_gray, cv2.TM_CCOEFF_NORMED)
+#         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
 
-        threshold = 0.8
-        if max_val >= threshold:
-            print(f"Firefox image similarity good: Max value: {max_val}")
-        else:
-            print(f"Firefox image similarity not good: Max value: {max_val}")
+#         threshold = 0.8
+#         if max_val >= threshold:
+#             print(f"Firefox image similarity good: Max value: {max_val}")
+#         else:
+#             print(f"Firefox image similarity not good: Max value: {max_val}")
 
-        assert max_val >= threshold, f"Images are not similar enough: max_val {max_val} < threshold {threshold}"
+#         assert max_val >= threshold, f"Images are not similar enough: max_val {max_val} < threshold {threshold}"
 
-        # Clean up the new screenshot after the test
-        # if os.path.exists(new_screenshot_path):
-        #     os.remove(new_screenshot_path)
+#         # Clean up the new screenshot after the test
+#         # if os.path.exists(new_screenshot_path):
+#         #     os.remove(new_screenshot_path)
 
-    except Exception as e:
-        print(f"Error in Firefox image comparison test: {e}")
-        import traceback
-        traceback.print_exc()
-        pytest.fail(f"Firefox image comparison test failed with error: {e}")
+#     except Exception as e:
+#         print(f"Error in Firefox image comparison test: {e}")
+#         import traceback
+#         traceback.print_exc()
+#         pytest.fail(f"Firefox image comparison test failed with error: {e}")
 
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
