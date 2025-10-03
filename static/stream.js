@@ -9,9 +9,25 @@ let pc = new RTCPeerConnection({
 })
 
 // Update connection status display
-function showStatus(status) {
+function showStatus(status, error = false) {
   const statusElement = document.getElementById('connectionStatus');
   statusElement.textContent = status;
+  if (error) {
+    statusElement.style.backgroundColor = 'rgba(255, 0, 0, 0.5)';
+  } else {
+    statusElement.style.backgroundColor = 'rgba(  0, 0, 0, 0.4)';
+  }
+}
+
+function checkCodecCompatibility(receivedCodec) {
+  const codecs = RTCRtpReceiver.getCapabilities('video').codecs;
+  const codecString = codecs.map(c => c.mimeType).join(' ').toLowerCase();
+
+  if (!codecString.includes(receivedCodec.toLowerCase())) {
+    showStatus(`❌ This browser does not support ${receivedCodec.toUpperCase()} video codec. Try Safari for H.265 support.`, true);
+    return false;
+  }
+  return true;
 }
 
 pc.ontrack = function (event) {
@@ -40,33 +56,40 @@ pc.ontrack = function (event) {
 let iceTimout = null
 
 function sendOffer() {
-  console.log('Sending offer...');
+  (async () => {
+    try {
+      console.log('Sending offer...');
 
-  // Send the offer to the server as JSON directly
-  fetch('/api/session', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      offer: pc.localDescription
-    }),
-  })
-  .then(response => {
-    if (!response.ok) {
-      throw new Error(`Server responded with ${response.status}: ${response.statusText}`)
+      const res = await fetch('/api/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offer: pc.localDescription }),
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      const text = await res.text();
+
+      if (!res.ok) {
+        console.error(`❌ Offer declined: ${res.status} ${text}`);
+        showStatus(`Connection failed: ${text || res.statusText}`, true);
+        return;
+      }
+
+      const data = contentType.includes('application/json') && text ? JSON.parse(text) : {};
+      console.log('Received answer from server');
+
+      if (data.negotiated_codec) {
+        console.log(`Server is sending: ${data.negotiated_codec.toUpperCase()}`);
+        if (!checkCodecCompatibility(data.negotiated_codec)) return;
+        showStatus(`Receiving: ${data.negotiated_codec.toUpperCase()}`);
+      }
+
+      await pc.setRemoteDescription(data.answer);
+    } catch (err) {
+      console.error(`❌ Connection failed: ${err.message}`);
+      showStatus(`Connection failed: ${err.message}`, true);
     }
-    return response.json()
-  })
-  .then(data => {
-    console.log('Received answer');
-
-    // Set the remote description with the answer from the server
-    pc.setRemoteDescription(data.answer);
-  })
-  .catch(error => {
-    console.error(`Connection failed: ${error.message}`);
-  });
+  })();
 }
 
 // Function to close the connection gracefully
@@ -117,7 +140,9 @@ pc.onicecandidate = event => {
 console.log('Starting connection...');
 
 // Offer to receive video track only
-pc.addTransceiver('video', {'direction': 'sendrecv'})
+const audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
+const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+
 pc.createOffer()
    .then(offer => {
        console.log('Offer created');
