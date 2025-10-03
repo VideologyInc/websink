@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os
+import os, shutil
 import time
 import threading
 import pytest
@@ -141,6 +141,8 @@ def chrome_driver():
     chrome_options.add_argument(f"--log-file={log_path}")
     # Headless mode can be problematic for WebRTC, but we'll try
     chrome_options.add_argument("--headless=new")  # New headless mode for Chrome
+    chromium_path = shutil.which("chromium-browser") or shutil.which("chromium")
+    chrome_options.binary_location = chromium_path
 
     # Set up webdriver
     print("Starting Chrome browser")
