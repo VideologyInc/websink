@@ -28,41 +28,6 @@ const RESET: &str = "\x1b[0m";
 // Debug category using the same category from imp.rs
 use crate::websink::imp::CAT;
 
-/// Find an available port, similar to the Go implementation
-/// If start_port is 0, find any available port
-/// Otherwise, try the specified port and increment if not available (up to 100 ports)
-pub fn find_available_port(start_port: u16) -> Result<u16, Box<dyn std::error::Error + Send + Sync>> {
-    // If start_port is 0, find any available port
-    if start_port == 0 {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let port = listener.local_addr()?.port();
-        drop(listener); // Close the listener
-        return Ok(port);
-    }
-
-    // Otherwise, try the specified port and increment if not available
-    let mut port = start_port;
-    let max_port = std::cmp::min(start_port.saturating_add(100), 65535); // Try up to 100 ports, but don't exceed 65535
-
-    while port <= max_port {
-        match TcpListener::bind(format!("127.0.0.1:{}", port)) {
-            Ok(_listener) => {
-                // Port is available, return it
-                return Ok(port);
-            }
-            Err(_) => {
-                // Port is not available, try the next one
-                if port == 65535 {
-                    break; // Avoid overflow
-                }
-                port += 1;
-            }
-        }
-    }
-
-    Err(format!("No available ports found between {} and {}", start_port, max_port).into())
-}
-
 // Re-export the embedded assets
 #[derive(RustEmbed)]
 #[folder = "static/"]
@@ -228,9 +193,18 @@ pub async fn handle_session_request(
     Ok(response)
 }
 
+fn next_free_port(mut port: u16) -> u16 {
+    loop {
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+        port += 1;
+    }
+}
+
 pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Runtime) -> Result<(tokio::task::JoinHandle<()>, u16), Box<dyn std::error::Error + Send + Sync>> {
     // Find an available port
-    let port = find_available_port(requested_port)?;
+    let port = next_free_port(requested_port);
     gst::info!(CAT, "🔍 Found available port: {} (requested: {})", port, requested_port);
 
     // Print all relevant addresses as in Go version
@@ -251,13 +225,8 @@ pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Run
     let ext_ip = external_ip.unwrap_or_else(|| "localhost".to_string());
     println!(
         "{green}HTTP server started at http://{host}.local:{port} and http://{ip}:{port}{reset}",
-        green=GREEN,
-        host=hostname,
-        port=port_str,
-        ip=ext_ip,
-        reset=RESET
+        green=GREEN, host=hostname, port=port_str, ip=ext_ip, reset=RESET
     );
-    gst::info!(CAT, "HTTP server starting on http://0.0.0.0:{}", port);
 
     let handle = rt.spawn(async move {
         let server = match Server::http(format!("[::]:{}", port)) {
@@ -267,8 +236,6 @@ pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Run
                 return;
             }
         };
-
-        gst::info!(CAT, "HTTP server started successfully on port {}", port);
 
         // Handle each request in a blocking manner since tiny_http is synchronous
         let rt_handle = tokio::runtime::Handle::current();
@@ -309,10 +276,7 @@ pub fn start_http_server(state: Arc<Mutex<State>>, requested_port: u16, rt: &Run
     Ok((handle, port))
 }
 
-async fn handle_session_request_http(
-    mut request: tiny_http::Request,
-    state: Arc<Mutex<State>>
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn handle_session_request_http(mut request: tiny_http::Request, state: Arc<Mutex<State>>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // For simplicity, parse a minimal JSON body
     let mut body = String::new();
     request.as_reader().read_to_string(&mut body)?;
