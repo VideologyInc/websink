@@ -58,6 +58,32 @@ fn test_websink_rtp_vp9() {
     run_pipeline(pls, 8090);
 }
 
+#[test]
+fn test_websink_sample_vp8() {
+    gst::init().expect("Failed to initialize gst_init");
+    gst::log::set_default_threshold(gst::DebugLevel::Warning);
+    gst::log::set_threshold_for_name("websink", gst::DebugLevel::Debug);
+
+    println!("🚀 Testing VP8 Sample Mode");
+    gst::Element::register(None, "websink", gst::Rank::NONE, WebSink::static_type()).unwrap();
+
+    let pls = "videotestsrc is-live=true num-buffers=300 ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! vp8enc deadline=1 ! websink port=8091";
+    run_pipeline(pls, 8091);
+}
+
+#[test]
+fn test_websink_sample_vp9() {
+    gst::init().expect("Failed to initialize gst_init");
+    gst::log::set_default_threshold(gst::DebugLevel::Warning);
+    gst::log::set_threshold_for_name("websink", gst::DebugLevel::Debug);
+
+    println!("🚀 Testing VP9 Sample Mode");
+    gst::Element::register(None, "websink", gst::Rank::NONE, WebSink::static_type()).unwrap();
+
+    let pls = "videotestsrc is-live=true num-buffers=300 ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! vp9enc deadline=1 ! websink port=8092";
+    run_pipeline(pls, 8092);
+}
+
 fn run_pipeline(pls: &str, port: u16) {
     let pipeline = gst::parse::launch(pls).unwrap();
     let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();

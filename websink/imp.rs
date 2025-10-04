@@ -62,6 +62,8 @@ impl VideoCodec {
         match name.as_str() {
             "video/x-h264" => Some((VideoCodec::H264, StreamMode::Sample)),
             "video/x-h265" => Some((VideoCodec::H265, StreamMode::Sample)),
+            "video/x-vp8" => Some((VideoCodec::VP8, StreamMode::Sample)),
+            "video/x-vp9" => Some((VideoCodec::VP9, StreamMode::Sample)),
             "application/x-rtp" => {
                 let encoding_name = structure.get::<String>("encoding-name").ok()?;
                 match encoding_name.as_str() {
@@ -214,7 +216,7 @@ impl ElementImpl for WebSink {
             gst::subclass::ElementMetadata::new(
                 "WebRTC Sink",
                 "Sink/Network",
-                "Stream H.264/H.265/VP8/VP9 video to web browsers using WebRTC. Supports both raw encoded streams and RTP packets.",
+                "Stream H.264/H.265/VP8/VP9 video to web browsers using WebRTC. Supports both raw encoded streams and RTP packets with auto-detection.",
                 "Videology Inc <info@videology.com>",
             )
         });
@@ -228,6 +230,8 @@ impl ElementImpl for WebSink {
             // Raw encoded caps
             let h264_caps = gst::Caps::builder("video/x-h264").field("stream-format", "byte-stream").field("alignment", "au").build();
             let h265_caps = gst::Caps::builder("video/x-h265").field("stream-format", "byte-stream").field("alignment", "au").build();
+            let vp8_caps = gst::Caps::builder("video/x-vp8").build();
+            let vp9_caps = gst::Caps::builder("video/x-vp9").build();
 
             // RTP caps for all supported codecs
             let rtp_caps = gst::Caps::builder("application/x-rtp")
@@ -238,6 +242,8 @@ impl ElementImpl for WebSink {
 
             let mut combined_caps = h264_caps;
             combined_caps.merge(h265_caps);
+            combined_caps.merge(vp8_caps);
+            combined_caps.merge(vp9_caps);
             combined_caps.merge(rtp_caps);
 
             let sink_pad_template =
