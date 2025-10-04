@@ -32,6 +32,18 @@ function checkCodecCompatibility(receivedCodec) {
 
 pc.ontrack = function (event) {
   if (event.track.kind === 'video') {
+    console.log('Received video track:', event.track);
+
+    // Get codec information from the receiver
+    const receiver = event.receiver;
+    if (receiver && receiver.getParameters) {
+      const params = receiver.getParameters();
+      console.log('Receiver parameters:', params);
+      if (params.codecs && params.codecs.length > 0) {
+        console.log('Negotiated codec:', params.codecs[0].mimeType);
+      }
+    }
+
     var videoElement = document.createElement('video');
     videoElement.srcObject = event.streams[0];
     videoElement.autoplay = true;

@@ -7,25 +7,58 @@ use std::sync::{Arc, Mutex};
 use websink::websink::WebSink;
 
 #[test]
-fn test_websink_pipeline() {
-    // Initialize GStreamer
+fn test_websink_sample_h264() {
     gst::init().expect("Failed to initialize gst_init");
-
-    /* Enable stdout debug for websink category */
     gst::log::set_default_threshold(gst::DebugLevel::Warning);
     gst::log::set_threshold_for_name("websink", gst::DebugLevel::Debug);
 
-    println!("🚀 Starting Rust WebSink test application");
-
-    // Register the WebSink element with GStreamer
+    println!("🚀 Testing H.264 Sample Mode");
     gst::Element::register(None, "websink", gst::Rank::NONE, WebSink::static_type()).unwrap();
 
-    // let main_loop = glib::MainLoop::new(None, false);
+    let pls = "videotestsrc is-live=true num-buffers=300 ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! x264enc tune=zerolatency ! websink port=8087";
+    run_pipeline(pls, 8087);
+}
 
-    // Start stream
+#[test]
+fn test_websink_rtp_h264() {
+    gst::init().expect("Failed to initialize gst_init");
+    gst::log::set_default_threshold(gst::DebugLevel::Warning);
+    gst::log::set_threshold_for_name("websink", gst::DebugLevel::Debug);
 
-    // let pls = "videotestsrc is-live=true ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! nvh265enc ! websink name=wsink port=8087";
-    let pls = "videotestsrc is-live=true ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! x264enc tune=zerolatency ! websink name=wsink port=8087";
+    println!("🚀 Testing H.264 RTP Mode");
+    gst::Element::register(None, "websink", gst::Rank::NONE, WebSink::static_type()).unwrap();
+
+    let pls = "videotestsrc is-live=true num-buffers=300 ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! x264enc tune=zerolatency ! rtph264pay ! websink port=8088";
+    run_pipeline(pls, 8088);
+}
+
+#[test]
+fn test_websink_rtp_vp8() {
+    gst::init().expect("Failed to initialize gst_init");
+    gst::log::set_default_threshold(gst::DebugLevel::Warning);
+    gst::log::set_threshold_for_name("websink", gst::DebugLevel::Debug);
+
+    println!("🚀 Testing VP8 RTP Mode");
+    gst::Element::register(None, "websink", gst::Rank::NONE, WebSink::static_type()).unwrap();
+
+    let pls = "videotestsrc is-live=true num-buffers=300 ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! vp8enc deadline=1 ! rtpvp8pay ! websink port=8089";
+    run_pipeline(pls, 8089);
+}
+
+#[test]
+fn test_websink_rtp_vp9() {
+    gst::init().expect("Failed to initialize gst_init");
+    gst::log::set_default_threshold(gst::DebugLevel::Warning);
+    gst::log::set_threshold_for_name("websink", gst::DebugLevel::Debug);
+
+    println!("🚀 Testing VP9 RTP Mode");
+    gst::Element::register(None, "websink", gst::Rank::NONE, WebSink::static_type()).unwrap();
+
+    let pls = "videotestsrc is-live=true num-buffers=300 ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! vp9enc deadline=1 ! rtpvp9pay ! websink port=8090";
+    run_pipeline(pls, 8090);
+}
+
+fn run_pipeline(pls: &str, port: u16) {
     let pipeline = gst::parse::launch(pls).unwrap();
     let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
 
@@ -58,7 +91,7 @@ fn test_websink_pipeline() {
         .expect("failed to add bus watch");
 
     // Open browser to the URL where your app is running
-    webbrowser::open("http://localhost:8087").expect("Failed to open web browser");
+    webbrowser::open(&format!("http://localhost:{}", port)).expect("Failed to open web browser");
 
     // Run for a short time, then send EOS
     std::thread::spawn({

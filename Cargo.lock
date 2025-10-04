@@ -876,6 +876,7 @@ dependencies = [
  "log",
  "mime_guess",
  "once_cell",
+ "rtp",
  "rust-embed",
  "serde",
  "serde_json",
@@ -885,6 +886,7 @@ dependencies = [
  "uuid",
  "webbrowser",
  "webrtc",
+ "webrtc-util",
 ]
 
 [[package]]

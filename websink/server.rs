@@ -19,6 +19,7 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
+use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocal;
 
 // Color codes for terminal output
@@ -45,6 +46,28 @@ pub struct SessionResponse {
     pub session_id: String,
     pub negotiated_codec: Option<String>,
 }
+// Video track enum to support both Sample and RTP modes
+#[derive(Clone)]
+pub enum VideoTrack {
+    Sample(Arc<TrackLocalStaticSample>),
+    Rtp(Arc<TrackLocalStaticRTP>),
+}
+
+impl VideoTrack {
+    pub fn as_track_local(&self) -> Arc<dyn TrackLocal + Send + Sync> {
+        match self {
+            VideoTrack::Sample(track) => Arc::clone(track) as Arc<dyn TrackLocal + Send + Sync>,
+            VideoTrack::Rtp(track) => Arc::clone(track) as Arc<dyn TrackLocal + Send + Sync>,
+        }
+    }
+
+    pub fn codec_mime_type(&self) -> String {
+        match self {
+            VideoTrack::Sample(track) => track.codec().clone().mime_type,
+            VideoTrack::Rtp(track) => track.codec().clone().mime_type,
+        }
+    }
+}
 
 // Element state containing HTTP server and WebRTC components
 #[derive(Default)]
@@ -55,7 +78,7 @@ pub struct State {
     pub unblock_tx: Option<mpsc::Sender<i32>>,
     pub unblock_rx: Option<mpsc::Receiver<i32>>,
     // WebRTC components
-    pub video_track: Option<Arc<TrackLocalStaticSample>>,
+    pub video_track: Option<VideoTrack>,
     pub webrtc_config: Option<RTCConfiguration>,
 }
 
@@ -74,8 +97,8 @@ pub async fn handle_session_request(
         (config, track)
     };
 
-    // Detect what codec we're actually sending (determined by GStreamer pipeline)
-    let actual_codec = video_track.codec().clone().mime_type.to_lowercase();
+    // Detect what codec we're actually sending
+    let actual_codec = video_track.codec_mime_type().to_lowercase();
     gst::info!(CAT, "🎥 Sending {} codec to client", actual_codec.to_uppercase());
 
     // Create a new MediaEngine and API for this session
@@ -91,7 +114,7 @@ pub async fn handle_session_request(
     let peer_connection = Arc::new(api.new_peer_connection(webrtc_config).await?);
     gst::info!(CAT, "📞 Created new peer connection");
 
-    let _rtp_sender = peer_connection.add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>).await?;
+    let _rtp_sender = peer_connection.add_track(video_track.as_track_local()).await?;
     gst::info!(CAT, "🎥 Added video track to peer connection");
 
     // Parse the offer from the request

@@ -11,12 +11,14 @@ use std::time::Duration;
 use bytes;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
-use webrtc::api::media_engine::{MIME_TYPE_H264, MIME_TYPE_HEVC};
+use webrtc::api::media_engine::{MIME_TYPE_H264, MIME_TYPE_HEVC, MIME_TYPE_VP8, MIME_TYPE_VP9};
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
+use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
+use webrtc::track::track_local::TrackLocalWriter;
 
 // Import from our server module
 use crate::websink::server;
@@ -30,6 +32,15 @@ pub static CAT: LazyLock<gst::DebugCategory> =
 pub enum VideoCodec {
     H264,
     H265,
+    VP8,
+    VP9,
+}
+
+// Stream mode enumeration
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamMode {
+    Sample,
+    Rtp,
 }
 
 impl VideoCodec {
@@ -38,17 +49,29 @@ impl VideoCodec {
         match self {
             VideoCodec::H264 => MIME_TYPE_H264,
             VideoCodec::H265 => MIME_TYPE_HEVC,
+            VideoCodec::VP8 => MIME_TYPE_VP8,
+            VideoCodec::VP9 => MIME_TYPE_VP9,
         }
     }
 
-    /// Detect codec from GStreamer caps
-    pub fn from_caps(caps: &gst::Caps) -> Option<Self> {
+    /// Detect codec and stream mode from GStreamer caps
+    pub fn from_caps(caps: &gst::Caps) -> Option<(Self, StreamMode)> {
         let structure = caps.structure(0)?;
         let name = structure.name();
 
         match name.as_str() {
-            "video/x-h264" => Some(VideoCodec::H264),
-            "video/x-h265" => Some(VideoCodec::H265),
+            "video/x-h264" => Some((VideoCodec::H264, StreamMode::Sample)),
+            "video/x-h265" => Some((VideoCodec::H265, StreamMode::Sample)),
+            "application/x-rtp" => {
+                let encoding_name = structure.get::<String>("encoding-name").ok()?;
+                match encoding_name.as_str() {
+                    "H264" => Some((VideoCodec::H264, StreamMode::Rtp)),
+                    "H265" => Some((VideoCodec::H265, StreamMode::Rtp)),
+                    "VP8" => Some((VideoCodec::VP8, StreamMode::Rtp)),
+                    "VP9" => Some((VideoCodec::VP9, StreamMode::Rtp)),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
@@ -58,6 +81,8 @@ impl VideoCodec {
         match self {
             VideoCodec::H264 => "H.264",
             VideoCodec::H265 => "H.265/HEVC",
+            VideoCodec::VP8 => "VP8",
+            VideoCodec::VP9 => "VP9",
         }
     }
 }
@@ -189,7 +214,7 @@ impl ElementImpl for WebSink {
             gst::subclass::ElementMetadata::new(
                 "WebRTC Sink",
                 "Sink/Network",
-                "Stream H.264/H.265 video to web browsers using WebRTC with automatic codec negotiation",
+                "Stream H.264/H.265/VP8/VP9 video to web browsers using WebRTC. Supports both raw encoded streams and RTP packets.",
                 "Videology Inc <info@videology.com>",
             )
         });
@@ -200,13 +225,20 @@ impl ElementImpl for WebSink {
     fn pad_templates() -> &'static [gst::PadTemplate] {
         use once_cell::sync::Lazy;
         static PAD_TEMPLATES: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
-            // Create caps for both H.264 and H.265
+            // Raw encoded caps
             let h264_caps = gst::Caps::builder("video/x-h264").field("stream-format", "byte-stream").field("alignment", "au").build();
             let h265_caps = gst::Caps::builder("video/x-h265").field("stream-format", "byte-stream").field("alignment", "au").build();
 
-            // Combine both caps using gst::Caps::merge
+            // RTP caps for all supported codecs
+            let rtp_caps = gst::Caps::builder("application/x-rtp")
+                .field("media", "video")
+                .field("encoding-name", gst::List::new(["H264", "H265", "VP8", "VP9"]))
+                .field("clock-rate", 90000)
+                .build();
+
             let mut combined_caps = h264_caps;
             combined_caps.merge(h265_caps);
+            combined_caps.merge(rtp_caps);
 
             let sink_pad_template =
                 gst::PadTemplate::new("sink", gst::PadDirection::Sink, gst::PadPresence::Always, &combined_caps).unwrap();
@@ -223,16 +255,16 @@ impl BaseSinkImpl for WebSink {
     fn set_caps(&self, caps: &gst::Caps) -> Result<(), gst::LoggableError> {
         gst::info!(CAT, "🎯 Setting caps: {}", caps);
 
-        // Detect codec from caps
-        let codec = VideoCodec::from_caps(caps).ok_or_else(|| gst::loggable_error!(CAT, "Unsupported video format in caps: {}", caps))?;
+        // Detect codec and stream mode from caps
+        let (codec, mode) = VideoCodec::from_caps(caps).ok_or_else(|| gst::loggable_error!(CAT, "Unsupported video format in caps: {}", caps))?;
 
-        gst::info!(CAT, "🎥 Detected codec: {}", codec.name());
+        gst::info!(CAT, "🎥 Detected codec: {} in {:?} mode", codec.name(), mode);
 
         // Create or update video track if we have a runtime
         let state_guard = self.state.lock().unwrap();
         if state_guard.runtime.is_some() {
             drop(state_guard);
-            self.create_video_track_for_codec(codec)?;
+            self.create_video_track(codec, mode)?;
         }
 
         Ok(())
@@ -312,8 +344,6 @@ impl BaseSinkImpl for WebSink {
         if let Some(handle) = state.server_handle.take() {
             gst::info!(CAT, "🌐 Aborting HTTP server task...");
             handle.abort();
-            // Optionally, could await the handle here if running in a context that allows it,
-            // but abort is generally sufficient for cleanup.
             gst::info!(CAT, "✅ HTTP server task aborted.");
         } else {
             gst::debug!(CAT, "🌐 No HTTP server handle to abort");
@@ -332,14 +362,11 @@ impl BaseSinkImpl for WebSink {
         state.webrtc_config = None;
         gst::debug!(CAT, "🧹 Reset all state components");
 
-        gst::debug!(CAT, "🔢 Peer connections cleared from state");
-
         gst::info!(CAT, "✅ WebSink stopped successfully");
         Ok(())
     }
 
     fn render(&self, buffer: &gst::Buffer) -> Result<gst::FlowSuccess, gst::FlowError> {
-        // Get the number of connected peers from state
         let (num_peers, is_live) = {
             let state_guard = self.state.lock().unwrap();
             let settings_guard = self.settings.lock().unwrap();
@@ -351,7 +378,6 @@ impl BaseSinkImpl for WebSink {
             gst::trace!(CAT, "🎬 Render called - buffer size: {} bytes, peers: {}", buffer.size(), num_peers);
         }
 
-        // In live mode, we skip rendering if no peers are connected
         if is_live && num_peers == 0 {
             if (render_count % 600) == 0 {
                 gst::trace!(CAT, "⏭️ No peers connected in live mode, skipping buffer");
@@ -359,7 +385,6 @@ impl BaseSinkImpl for WebSink {
             return Ok(gst::FlowSuccess::Ok);
         }
 
-        // Map the buffer to get the data
         let map = buffer.map_readable().map_err(|_| {
             gst::error!(CAT, "❌ Failed to map buffer");
             gst::FlowError::Error
@@ -367,61 +392,83 @@ impl BaseSinkImpl for WebSink {
 
         let data = map.as_slice();
 
-        // Send to video track if we have peers
         if num_peers > 0 {
             let state = self.state.lock().unwrap();
             if let Some(video_track) = &state.video_track {
-                let track_clone = Arc::clone(video_track);
-                let data_copy = bytes::Bytes::copy_from_slice(data);
-                let duration = buffer.duration().unwrap_or_else(|| gst::ClockTime::from_nseconds(33_333_333)); // Default 30fps
+                match video_track {
+                    server::VideoTrack::Sample(track) => {
+                        let track_clone = Arc::clone(track);
+                        let data_copy = bytes::Bytes::copy_from_slice(data);
+                        let duration = buffer.duration().unwrap_or_else(|| gst::ClockTime::from_nseconds(33_333_333));
 
-                if (render_count % 100) == 0 {
-                    gst::trace!(CAT, "⏱️ Buffer duration: {} ns", duration.nseconds());
-                }
+                        if let Some(runtime) = &state.runtime {
+                            runtime.spawn(async move {
+                                let sample = Sample { data: data_copy, duration: Duration::from_nanos(duration.nseconds()), ..Default::default() };
 
-                // Use the runtime to send the sample
-                if let Some(runtime) = &state.runtime {
-                    runtime.spawn(async move {
-                        let sample = Sample { data: data_copy, duration: Duration::from_nanos(duration.nseconds()), ..Default::default() };
-
-                        gst::trace!(CAT, "🚀 Spawned async task to write sample to WebRTC track");
-
-                        if let Err(e) = track_clone.write_sample(&sample).await {
-                            gst::error!(CAT, "❌ Failed to write sample to WebRTC track: {}", e);
-                        } else {
-                            gst::trace!(CAT, "✅ Successfully wrote sample to WebRTC track");
+                                if let Err(e) = track_clone.write_sample(&sample).await {
+                                    gst::error!(CAT, "❌ Failed to write sample: {}", e);
+                                }
+                            });
                         }
-                    });
-                } else {
-                    gst::error!(CAT, "❌ No Tokio runtime available for async sample writing");
+                    }
+                    server::VideoTrack::Rtp(track) => {
+                        let track_clone = Arc::clone(track);
+                        let data_copy = data.to_vec();
+
+                        if let Some(runtime) = &state.runtime {
+                            runtime.spawn(async move {
+                                use util::Unmarshal;
+
+                                let mut buf = &data_copy[..];
+                                match rtp::packet::Packet::unmarshal(&mut buf) {
+                                    Ok(rtp_packet) => {
+                                        if let Err(e) = track_clone.write_rtp(&rtp_packet).await {
+                                            gst::error!(CAT, "❌ Failed to write RTP packet: {}", e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        gst::error!(CAT, "❌ Failed to parse RTP packet: {}", e);
+                                    }
+                                }
+                            });
+                        }
+                    }
                 }
-            } else {
-                gst::warning!(CAT, "⚠️ No video track available for sample writing");
             }
-        } else {
-            gst::trace!(CAT, "👥 No peers connected, not sending video data");
         }
 
-        gst::trace!(CAT, "✅ Rendered buffer with {} bytes to {} peers", data.len(), num_peers);
         Ok(gst::FlowSuccess::Ok)
     }
 }
 
 impl WebSink {
-    /// Create video track for the specified codec
-    fn create_video_track_for_codec(&self, codec: VideoCodec) -> Result<(), gst::LoggableError> {
-        gst::debug!(CAT, "🎥 Creating video track for {}", codec.name());
+    /// Create video track for the specified codec and mode
+    fn create_video_track(&self, codec: VideoCodec, mode: StreamMode) -> Result<(), gst::LoggableError> {
+        gst::debug!(CAT, "🎥 Creating video track for {} in {:?} mode", codec.name(), mode);
 
-        let video_track = Arc::new(TrackLocalStaticSample::new(
-            RTCRtpCodecCapability { mime_type: codec.mime_type().to_owned(), ..Default::default() },
-            "video".to_owned(),
-            "websink".to_owned(),
-        ));
-
-        gst::info!(CAT, "✅ Video track created successfully for {}", codec.name());
-
-        // Store the video track in state
         let mut state = self.state.lock().unwrap();
+
+        let video_track = match mode {
+            StreamMode::Sample => {
+                let track = Arc::new(TrackLocalStaticSample::new(
+                    RTCRtpCodecCapability { mime_type: codec.mime_type().to_owned(), ..Default::default() },
+                    "video".to_owned(),
+                    "websink".to_owned(),
+                ));
+                gst::info!(CAT, "✅ Sample mode video track created for {}", codec.name());
+                server::VideoTrack::Sample(track)
+            }
+            StreamMode::Rtp => {
+                let track = Arc::new(TrackLocalStaticRTP::new(
+                    RTCRtpCodecCapability { mime_type: codec.mime_type().to_owned(), ..Default::default() },
+                    "video".to_owned(),
+                    "websink".to_owned(),
+                ));
+                gst::info!(CAT, "✅ RTP mode video track created for {}", codec.name());
+                server::VideoTrack::Rtp(track)
+            }
+        };
+
         state.video_track = Some(video_track);
 
         Ok(())
