@@ -21,15 +21,20 @@
             left: 0;
             width: 100%;
             height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 10px;
+            padding: 10px;
+            box-sizing: border-box;
         }
 
-        video {
+        .stream-video {
             width: 100%;
             height: 100%;
             object-fit: contain;
+            background: #000;
+            border: 2px solid #333;
+            border-radius: 8px;
         }
 
         #connectionStatus {

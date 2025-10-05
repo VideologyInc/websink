@@ -142,7 +142,8 @@ def chrome_driver():
     # Headless mode can be problematic for WebRTC, but we'll try
     chrome_options.add_argument("--headless=new")  # New headless mode for Chrome
     chromium_path = shutil.which("chromium-browser") or shutil.which("chromium")
-    chrome_options.binary_location = chromium_path
+    if chromium_path:
+        chrome_options.binary_location = chromium_path
 
     # Set up webdriver
     print("Starting Chrome browser")
@@ -293,6 +294,182 @@ def test_image_comparison(gstreamer_pipeline, chrome_driver):
         import traceback
         traceback.print_exc()
         pytest.fail(f"Image comparison test failed with error: {e}")
+
+def test_multi_stream_console_logs(chrome_driver):
+    """Test multi-stream with console log capture to debug ontrack events."""
+    global loop, pipeline_thread, pipeline
+
+    print("Setting up multi-stream GStreamer pipeline")
+    loop = GLib.MainLoop()
+
+    def start_multi_pipeline():
+        global pipeline, loop
+        try:
+            pipeline_str = '''
+                websink name=ws port=8092 is-live=true
+                videotestsrc pattern=0 is-live=true num-buffers=300 ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! x264enc tune=zerolatency ! ws.
+                videotestsrc pattern=1 is-live=true num-buffers=300 ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! vp8enc deadline=1 ! ws.
+            '''
+            print(f"Multi-stream pipeline: {pipeline_str}")
+            pipeline = Gst.parse_launch(pipeline_str)
+
+            bus = pipeline.get_bus()
+            bus.add_signal_watch()
+            bus.connect("message", on_bus_message)
+
+            ret = pipeline.set_state(Gst.State.PLAYING)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                print("Failed to start pipeline")
+                return
+
+            print("Multi-stream pipeline is playing")
+            loop.run()
+        except Exception as e:
+            print(f"Error in multi-stream pipeline: {e}")
+            if loop and loop.is_running():
+                loop.quit()
+
+    pipeline_thread = threading.Thread(target=start_multi_pipeline)
+    pipeline_thread.daemon = True
+    pipeline_thread.start()
+    time.sleep(2)
+
+    try:
+        url = "http://localhost:8092"
+        print(f"Navigating to {url}")
+
+        # Enable browser logging
+        chrome_driver.execute_cdp_cmd('Log.enable', {})
+        chrome_driver.get(url)
+
+        # Wait for connection
+        wait = WebDriverWait(chrome_driver, 10)
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "video")))
+        time.sleep(3)
+
+        # Get console logs
+        logs = chrome_driver.get_log('browser')
+        print("\n=== Browser Console Logs ===")
+        for log in logs:
+            print(f"{log['level']}: {log['message']}")
+
+        # Execute JavaScript to check state
+        track_count = chrome_driver.execute_script("""
+            console.log('=== Checking WebRTC State ===');
+            console.log('videoElements length:', videoElements.length);
+            console.log('Video elements in DOM:', document.querySelectorAll('video').length);
+            console.log('PC state:', pc.connectionState);
+            console.log('PC ice state:', pc.iceConnectionState);
+
+            // Log transceiver info
+            const transceivers = pc.getTransceivers();
+            console.log('Number of transceivers:', transceivers.length);
+            transceivers.forEach((t, i) => {
+                console.log(`Transceiver ${i}:`, {
+                    direction: t.direction,
+                    mid: t.mid,
+                    stopped: t.stopped
+                });
+                if (t.receiver && t.receiver.track) {
+                    console.log(`  Track:`, t.receiver.track.id, t.receiver.track.kind);
+                }
+            });
+
+            return {
+                videoElementsCount: videoElements.length,
+                domVideoCount: document.querySelectorAll('video').length,
+                transceiverCount: transceivers.length
+            };
+        """)
+
+        print(f"\n=== WebRTC State ===")
+        print(f"videoElements array: {track_count['videoElementsCount']}")
+        print(f"DOM video elements: {track_count['domVideoCount']}")
+        print(f"Transceivers: {track_count['transceiverCount']}")
+
+        # Check assertions
+        assert track_count['videoElementsCount'] == 2, f"Expected 2 video elements, got {track_count['videoElementsCount']}"
+        assert track_count['domVideoCount'] == 2, f"Expected 2 DOM video elements, got {track_count['domVideoCount']}"
+
+    finally:
+        print("Cleaning up multi-stream test")
+        if pipeline:
+            pipeline.set_state(Gst.State.NULL)
+        if loop and loop.is_running():
+            loop.quit()
+        if pipeline_thread and pipeline_thread.is_alive():
+            pipeline_thread.join(timeout=2)
+
+def test_single_stream_debug(gstreamer_pipeline, chrome_driver):
+    """Test single-stream with detailed logging to debug peer connection issues."""
+    try:
+        url = "http://localhost:8091"
+        print(f"Navigating to {url}")
+
+        # Enable browser logging
+        chrome_driver.execute_cdp_cmd('Log.enable', {})
+        chrome_driver.get(url)
+
+        # Wait for connection
+        wait = WebDriverWait(chrome_driver, 10)
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "video")))
+        time.sleep(3)
+
+        # Get console logs
+        logs = chrome_driver.get_log('browser')
+        print("\n=== Browser Console Logs ===")
+        for log in logs:
+            print(f"{log['level']}: {log['message']}")
+
+        # Check peer connection state
+        pc_state = chrome_driver.execute_script("""
+            console.log('=== Checking Peer Connection State ===');
+            console.log('PC state:', pc.connectionState);
+            console.log('PC ice state:', pc.iceConnectionState);
+            console.log('PC signaling state:', pc.signalingState);
+
+            return {
+                connectionState: pc.connectionState,
+                iceConnectionState: pc.iceConnectionState,
+                signalingState: pc.signalingState,
+                localDescription: pc.localDescription ? 'present' : 'null',
+                remoteDescription: pc.remoteDescription ? 'present' : 'null'
+            };
+        """)
+
+        print(f"\n=== Peer Connection State ===")
+        for key, value in pc_state.items():
+            print(f"{key}: {value}")
+
+        # Check if video is playing
+        is_playing = chrome_driver.execute_script("""
+            const videos = document.querySelectorAll('video');
+            if (videos.length === 0) return 'no video elements';
+
+            const video = videos[0];
+            return {
+                paused: video.paused,
+                ended: video.ended,
+                currentTime: video.currentTime,
+                readyState: video.readyState,
+                networkState: video.networkState
+            };
+        """)
+
+        print(f"\n=== Video State ===")
+        print(f"Video state: {is_playing}")
+
+        # Assert expectations
+        assert pc_state['connectionState'] == 'connected', f"Expected connected state, got {pc_state['connectionState']}"
+        if isinstance(is_playing, dict):
+            assert not is_playing['paused'], "Video should not be paused"
+            assert is_playing['currentTime'] > 0, "Video should be playing (currentTime > 0)"
+
+    except Exception as e:
+        print(f"Error in test: {e}")
+        import traceback
+        traceback.print_exc()
+        pytest.fail(f"Test failed with error: {e}")
 
 # def test_image_comparison_firefox(gstreamer_pipeline, firefox_driver):
 #     """

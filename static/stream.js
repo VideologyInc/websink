@@ -30,15 +30,22 @@ function checkCodecCompatibility(receivedCodec) {
   return true;
 }
 
-pc.ontrack = function (event) {
-  if (event.track.kind === 'video') {
-    console.log('Received video track:', event.track);
+let videoElements = [];
 
-    // Get codec information from the receiver
+pc.ontrack = function (event) {
+  console.log('=== ontrack event fired ===');
+  console.log('Track:', event.track.kind, event.track.id, event.track.label);
+  console.log('Streams count:', event.streams.length);
+  event.streams.forEach((stream, idx) => {
+    console.log(`  Stream ${idx} id: ${stream.id}, tracks: ${stream.getTracks().length}`);
+  });
+
+  if (event.track.kind === 'video') {
+    console.log('Processing video track:', event.track.id);
+
     const receiver = event.receiver;
     if (receiver && receiver.getParameters) {
       const params = receiver.getParameters();
-      console.log('Receiver parameters:', params);
       if (params.codecs && params.codecs.length > 0) {
         console.log('Negotiated codec:', params.codecs[0].mimeType);
       }
@@ -49,19 +56,20 @@ pc.ontrack = function (event) {
     videoElement.autoplay = true;
     videoElement.playsInline = true;
     videoElement.muted = true;
+    videoElement.className = 'stream-video';
 
-    // Add loadedmetadata event listener to ensure video is ready
     videoElement.addEventListener('loadedmetadata', function() {
-      // Ensure playback starts
       videoElement.play().catch(e => {
         console.warn(`Autoplay failed: ${e.message}. User interaction may be required.`);
       });
     });
 
-    // Clear any existing video elements
     const videoContainer = document.getElementById('videoContainer');
-    videoContainer.innerHTML = '';
     videoContainer.appendChild(videoElement);
+    videoElements.push(videoElement);
+
+    console.log(`Total video tracks: ${videoElements.length}`);
+    showStatus(`Playing ${videoElements.length} stream(s)`);
   }
 }
 
@@ -90,10 +98,13 @@ function sendOffer() {
       const data = contentType.includes('application/json') && text ? JSON.parse(text) : {};
       console.log('Received answer from server');
 
-      if (data.negotiated_codec) {
-        console.log(`Server is sending: ${data.negotiated_codec.toUpperCase()}`);
-        if (!checkCodecCompatibility(data.negotiated_codec)) return;
-        showStatus(`Receiving: ${data.negotiated_codec.toUpperCase()}`);
+      if (data.tracks && data.tracks.length > 0) {
+        console.log(`Server is sending ${data.tracks.length} track(s):`);
+        data.tracks.forEach((track, idx) => {
+          console.log(`  Track ${idx}: ${track.codec} (${track.kind})`);
+          if (!checkCodecCompatibility(track.codec)) return;
+        });
+        showStatus(`Receiving: ${data.tracks.length} stream(s)`);
       }
 
       await pc.setRemoteDescription(data.answer);
@@ -151,11 +162,8 @@ pc.onicecandidate = event => {
 // Initialize connection
 console.log('Starting connection...');
 
-// Offer to receive video track only
-const audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
-const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
-
-pc.createOffer()
+// Create offer without adding transceivers - let WebRTC negotiate based on server's tracks
+pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
    .then(offer => {
        console.log('Offer created');
        return pc.setLocalDescription(offer);

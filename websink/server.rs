@@ -1,5 +1,6 @@
 use get_if_addrs::get_if_addrs;
 use hostname::get as get_hostname;
+use lazy_static::lazy_static;
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,8 +19,8 @@ use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 
 // Color codes for terminal output
@@ -44,7 +45,14 @@ pub struct SessionRequest {
 pub struct SessionResponse {
     pub answer: serde_json::Value,
     pub session_id: String,
-    pub negotiated_codec: Option<String>,
+    pub tracks: Vec<TrackInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TrackInfo {
+    pub id: String,
+    pub codec: String,
+    pub kind: String,
 }
 // Video track enum to support both Sample and RTP modes
 #[derive(Clone)]
@@ -78,8 +86,13 @@ pub struct State {
     pub unblock_tx: Option<mpsc::Sender<i32>>,
     pub unblock_rx: Option<mpsc::Receiver<i32>>,
     // WebRTC components
-    pub video_track: Option<VideoTrack>,
+    pub video_tracks: Vec<VideoTrack>, // Changed from Option<VideoTrack>
     pub webrtc_config: Option<RTCConfiguration>,
+}
+
+// Global session registry for shared sessions
+lazy_static! {
+    pub static ref SESSIONS: Arc<Mutex<HashMap<String, Arc<Mutex<State>>>>> = Arc::new(Mutex::new(HashMap::new()));
 }
 
 // Handle WebRTC session request (create peer connection and answer)
@@ -89,17 +102,18 @@ pub async fn handle_session_request(
 ) -> Result<SessionResponse, Box<dyn std::error::Error + Send + Sync>> {
     gst::info!(CAT, "🎯 Processing WebRTC session request");
 
-    // Get the shared video track and config from state
-    let (webrtc_config, video_track) = {
+    // Get the shared video tracks and config from state
+    let (webrtc_config, video_tracks) = {
         let state_guard = state.lock().unwrap();
         let config = state_guard.webrtc_config.clone().ok_or("WebRTC config not initialized")?;
-        let track = state_guard.video_track.clone().ok_or("Video track not initialized")?;
-        (config, track)
+        let tracks = state_guard.video_tracks.clone();
+        if tracks.is_empty() {
+            return Err("No video tracks initialized".into());
+        }
+        (config, tracks)
     };
 
-    // Detect what codec we're actually sending
-    let actual_codec = video_track.codec_mime_type().to_lowercase();
-    gst::info!(CAT, "🎥 Sending {} codec to client", actual_codec.to_uppercase());
+    gst::info!(CAT, "🎥 Sending {} track(s) to client", video_tracks.len());
 
     // Create a new MediaEngine and API for this session
     let mut m = MediaEngine::default();
@@ -113,9 +127,14 @@ pub async fn handle_session_request(
     // Create a new peer connection using the API and shared config
     let peer_connection = Arc::new(api.new_peer_connection(webrtc_config).await?);
     gst::info!(CAT, "📞 Created new peer connection");
-
-    let _rtp_sender = peer_connection.add_track(video_track.as_track_local()).await?;
-    gst::info!(CAT, "🎥 Added video track to peer connection");
+    // Add all tracks to peer connection
+    let mut track_infos = Vec::new();
+    for (idx, video_track) in video_tracks.iter().enumerate() {
+        let _rtp_sender = peer_connection.add_track(video_track.as_track_local()).await?;
+        let codec = video_track.codec_mime_type();
+        track_infos.push(TrackInfo { id: format!("track_{}", idx), codec: codec.clone(), kind: "video".to_string() });
+        gst::info!(CAT, "🎥 Added track {} ({}) to peer connection", idx, codec);
+    }
 
     // Parse the offer from the request
     let offer: RTCSessionDescription = serde_json::from_value(req.offer)?;
@@ -132,13 +151,8 @@ pub async fn handle_session_request(
     // Set local description
     peer_connection.set_local_description(answer).await.map_err(|e| {
         if e.to_string().contains("codec is not supported") {
-            gst::error!(
-                CAT,
-                "❌ It seems the codec is not supported by the browser. Ensure your GStreamer pipeline uses H.264 or H.265 codec."
-            );
-            let return_error_string = format!("Server is sending {}. Codec is not supported by browser.", actual_codec.to_uppercase());
-            // Return a string error
-            Box::<dyn std::error::Error + Send + Sync>::from(return_error_string)
+            gst::error!(CAT, "❌ Codec not supported by browser.");
+            Box::<dyn std::error::Error + Send + Sync>::from("Codec not supported by browser")
         } else {
             Box::<dyn std::error::Error + Send + Sync>::from(e)
         }
@@ -199,9 +213,9 @@ pub async fn handle_session_request(
     // Serialize answer to JSON
     let answer_json = serde_json::to_value(&final_answer)?;
 
-    let response = SessionResponse { answer: answer_json, session_id: session_id.clone(), negotiated_codec: Some(actual_codec.clone()) };
+    let response = SessionResponse { answer: answer_json, session_id: session_id.clone(), tracks: track_infos.clone() };
 
-    gst::info!(CAT, "✅ WebRTC session established with ID: {} using codec: {}", session_id, actual_codec);
+    gst::info!(CAT, "✅ WebRTC session established with ID: {} with {} track(s)", session_id, track_infos.len());
     Ok(response)
 }
 

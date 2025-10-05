@@ -84,6 +84,21 @@ fn test_websink_sample_vp9() {
     run_pipeline(pls, 8092);
 }
 
+#[test]
+fn test_websink_multi_stream() {
+    gst::init().expect("Failed to initialize gst_init");
+    gst::log::set_default_threshold(gst::DebugLevel::Warning);
+    gst::log::set_threshold_for_name("websink", gst::DebugLevel::Debug);
+
+    println!("🚀 Testing Multi-Stream Mode (H.264 + VP8)");
+    gst::Element::register(None, "websink", gst::Rank::NONE, WebSink::static_type()).unwrap();
+
+    let pls = "websink name=ws port=8093 \
+               videotestsrc pattern=0 is-live=true num-buffers=300 ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! x264enc tune=zerolatency ! ws. \
+               videotestsrc pattern=1 is-live=true num-buffers=300 ! video/x-raw,width=640,height=480,framerate=30/1 ! videoconvert ! vp8enc deadline=1 ! ws.";
+    run_pipeline(pls, 8093);
+}
+
 fn run_pipeline(pls: &str, port: u16) {
     let pipeline = gst::parse::launch(pls).unwrap();
     let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
@@ -123,7 +138,7 @@ fn run_pipeline(pls: &str, port: u16) {
     std::thread::spawn({
         let pipeline = pipeline.clone();
         move || {
-            std::thread::sleep(std::time::Duration::from_secs(20));
+            std::thread::sleep(std::time::Duration::from_secs(2000));
             pipeline.send_event(gst::event::Eos::new());
         }
     });

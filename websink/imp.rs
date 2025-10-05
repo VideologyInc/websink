@@ -1,8 +1,8 @@
 use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
-use gst_base::subclass::prelude::*;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
@@ -16,8 +16,8 @@ use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
-use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocalWriter;
 
 // Import from our server module
@@ -110,29 +110,38 @@ impl Default for Settings {
 // Use the State type from server module
 type State = server::State;
 
-// Element that keeps track of everything
+#[derive(Debug, Clone)]
+struct PadInfo {
+    codec: VideoCodec,
+    mode: StreamMode,
+    track_index: usize,
+}
+
 pub struct WebSink {
     settings: Mutex<Settings>,
     state: Arc<Mutex<State>>,
-    render_count: AtomicU32,
+    pad_counter: AtomicU32,
+    pad_info: Mutex<HashMap<String, PadInfo>>,
 }
 
-// Default implementation for our element
 impl Default for WebSink {
     fn default() -> Self {
-        Self { settings: Mutex::new(Settings::default()), state: Arc::new(Mutex::new(State::default())), render_count: AtomicU32::new(0) }
+        Self {
+            settings: Mutex::new(Settings::default()),
+            state: Arc::new(Mutex::new(State::default())),
+            pad_counter: AtomicU32::new(0),
+            pad_info: Mutex::new(HashMap::new()),
+        }
     }
 }
 
-// Implementation of GObject virtual methods for our element
 #[glib::object_subclass]
 impl ObjectSubclass for WebSink {
     const NAME: &'static str = "WebSink";
     type Type = super::WebSink;
-    type ParentType = gst_base::BaseSink;
+    type ParentType = gst::Element;
 }
 
-// Implementation of GObject methods
 impl ObjectImpl for WebSink {
     fn properties() -> &'static [glib::ParamSpec] {
         use once_cell::sync::Lazy;
@@ -247,152 +256,114 @@ impl ElementImpl for WebSink {
             combined_caps.merge(rtp_caps);
 
             let sink_pad_template =
-                gst::PadTemplate::new("sink", gst::PadDirection::Sink, gst::PadPresence::Always, &combined_caps).unwrap();
+                gst::PadTemplate::new("sink_%u", gst::PadDirection::Sink, gst::PadPresence::Request, &combined_caps).unwrap();
 
             vec![sink_pad_template]
         });
 
         PAD_TEMPLATES.as_ref()
     }
+
+    fn request_new_pad(
+        &self,
+        templ: &gst::PadTemplate,
+        _name: Option<&str>,
+        _caps: Option<&gst::Caps>,
+    ) -> Option<gst::Pad> {
+        let pad_id = self.pad_counter.fetch_add(1, Ordering::Relaxed);
+        let pad_name = format!("sink_{}", pad_id);
+
+        gst::info!(CAT, "Creating new pad: {}", pad_name);
+
+        let pad = gst::Pad::builder_from_template(templ)
+            .name(&pad_name)
+            .chain_function(|pad, parent, buffer| {
+                WebSink::catch_panic_pad_function(
+                    parent,
+                    || Err(gst::FlowError::Error),
+                    |websink| websink.sink_chain(pad, buffer),
+                )
+            })
+            .event_function(|pad, parent, event| {
+                WebSink::catch_panic_pad_function(
+                    parent,
+                    || false,
+                    |websink| websink.sink_event(pad, event),
+                )
+            })
+            .build();
+
+        pad.set_active(true).ok()?;
+
+        let element = self.obj();
+        element.add_pad(&pad).ok()?;
+
+        gst::info!(CAT, "Pad {} created successfully", pad_name);
+        Some(pad)
+    }
+
+    fn release_pad(&self, pad: &gst::Pad) {
+        gst::info!(CAT, "Releasing pad: {}", pad.name());
+
+        let mut pad_info = self.pad_info.lock().unwrap();
+        if let Some(info) = pad_info.remove(pad.name().as_str()) {
+            gst::debug!(CAT, "Removed track at index {} for pad {}", info.track_index, pad.name());
+        }
+
+        let element = self.obj();
+        element.remove_pad(pad).ok();
+    }
+
+    fn change_state(
+        &self,
+        transition: gst::StateChange,
+    ) -> Result<gst::StateChangeSuccess, gst::StateChangeError> {
+        match transition {
+            gst::StateChange::NullToReady => {
+                self.start().map_err(|e| {
+                    gst::error!(CAT, "Failed to start: {}", e);
+                    gst::StateChangeError
+                })?;
+            }
+            gst::StateChange::ReadyToNull => {
+                self.stop().map_err(|e| {
+                    gst::error!(CAT, "Failed to stop: {}", e);
+                    gst::StateChangeError
+                })?;
+            }
+            _ => {}
+        }
+
+        self.parent_change_state(transition)
+    }
 }
 
-// Implementation of BaseSink methods
-impl BaseSinkImpl for WebSink {
-    fn set_caps(&self, caps: &gst::Caps) -> Result<(), gst::LoggableError> {
-        gst::info!(CAT, "🎯 Setting caps: {}", caps);
+impl WebSink {
+    fn sink_chain(&self, pad: &gst::Pad, buffer: gst::Buffer) -> Result<gst::FlowSuccess, gst::FlowError> {
+        let pad_name = pad.name();
 
-        // Detect codec and stream mode from caps
-        let (codec, mode) = VideoCodec::from_caps(caps).ok_or_else(|| gst::loggable_error!(CAT, "Unsupported video format in caps: {}", caps))?;
-
-        gst::info!(CAT, "🎥 Detected codec: {} in {:?} mode", codec.name(), mode);
-
-        // Create or update video track if we have a runtime
-        let state_guard = self.state.lock().unwrap();
-        if state_guard.runtime.is_some() {
-            drop(state_guard);
-            self.create_video_track(codec, mode)?;
-        }
-
-        Ok(())
-    }
-
-    fn start(&self) -> Result<(), gst::ErrorMessage> {
-        gst::info!(CAT, "🚀 Starting WebSink");
-
-        // Initialize Tokio runtime
-        gst::debug!(CAT, "⚙️ Initializing Tokio runtime");
-        let runtime = match Runtime::new() {
-            Ok(rt) => {
-                gst::info!(CAT, "✅ Tokio runtime created successfully");
-                rt
-            }
-            Err(err) => {
-                gst::error!(CAT, "❌ Failed to create Tokio runtime: {}", err);
-                return Err(gst::error_msg!(gst::ResourceError::Failed, ["Failed to create Tokio runtime: {}", err]));
-            }
-        };
-
-        // Setup an unblock channel for live mode
-        let (tx, rx) = mpsc::channel(1);
-        gst::info!(CAT, "📺 Created mpsc channel for live mode signaling");
-
-        gst::info!(CAT, "✅ WebRTC components will be initialized per session");
-
-        // Note: Video track will be created in set_caps when codec is detected
-        gst::debug!(CAT, "📋 Video track will be created when codec is detected from caps");
-
-        // Configure WebRTC
-        let settings = self.settings.lock().unwrap();
-        let mut webrtc_config = RTCConfiguration::default();
-        if !settings.stun_server.is_empty() {
-            webrtc_config.ice_servers = vec![RTCIceServer { urls: vec![settings.stun_server.clone()], ..Default::default() }];
-            gst::info!(CAT, "🌐 STUN server configured: {}", settings.stun_server);
-        } else {
-            gst::info!(CAT, "⚠️ No STUN server configured");
-        }
-        let port = settings.port;
-        drop(settings);
-
-        let mut state = self.state.lock().unwrap();
-        state.runtime = Some(runtime);
-        state.unblock_tx = Some(tx);
-        state.unblock_rx = Some(rx);
-        state.webrtc_config = Some(webrtc_config);
-
-        // Start HTTP server
-        gst::info!(CAT, "🌐 Starting HTTP server on port {}", port);
-        let rt = state.runtime.as_ref().expect("Runtime should be initialized");
-        match self.start_http_server(port, rt) {
-            Ok((server_handle, actual_port)) => {
-                gst::info!(CAT, "✅ HTTP server started successfully on port {}", actual_port);
-                state.server_handle = Some(server_handle);
-                // Store the actual port used for future reference if needed
-                drop(state);
-            }
-            Err(err) => {
-                gst::error!(CAT, "❌ Failed to start HTTP server: {}", err);
-                drop(state);
-                return Err(gst::error_msg!(gst::ResourceError::Failed, ["Failed to start HTTP server: {}", err]));
-            }
-        }
-        gst::info!(CAT, "✅ WebSink started successfully");
-
-        Ok(())
-    }
-
-    fn stop(&self) -> Result<(), gst::ErrorMessage> {
-        gst::info!(CAT, "🛑 Stopping WebSink");
-
-        // Clean up resources
-        let mut state = self.state.lock().unwrap();
-
-        // Stop the HTTP server
-        if let Some(handle) = state.server_handle.take() {
-            gst::info!(CAT, "🌐 Aborting HTTP server task...");
-            handle.abort();
-            gst::info!(CAT, "✅ HTTP server task aborted.");
-        } else {
-            gst::debug!(CAT, "🌐 No HTTP server handle to abort");
-        }
-
-        // Clear peer connections
-        let peer_count = state.peer_connections.len();
-        state.peer_connections.clear();
-        gst::info!(CAT, "👥 Cleared {} peer connections", peer_count);
-
-        // Reset state
-        state.unblock_tx = None;
-        state.unblock_rx = None;
-        state.runtime = None;
-        state.video_track = None;
-        state.webrtc_config = None;
-        gst::debug!(CAT, "🧹 Reset all state components");
-
-        gst::info!(CAT, "✅ WebSink stopped successfully");
-        Ok(())
-    }
-
-    fn render(&self, buffer: &gst::Buffer) -> Result<gst::FlowSuccess, gst::FlowError> {
-        let (num_peers, is_live) = {
+        let (num_peers, is_live, track_index) = {
             let state_guard = self.state.lock().unwrap();
             let settings_guard = self.settings.lock().unwrap();
-            (state_guard.peer_connections.len(), settings_guard.is_live)
-        };
-        let render_count = self.render_count.fetch_add(1, Ordering::Relaxed);
+            let pad_info_guard = self.pad_info.lock().unwrap();
 
-        if render_count % 600 == 0 {
-            gst::trace!(CAT, "🎬 Render called - buffer size: {} bytes, peers: {}", buffer.size(), num_peers);
-        }
+            let track_idx = pad_info_guard.get(pad_name.as_str()).map(|info| info.track_index);
+            (state_guard.peer_connections.len(), settings_guard.is_live, track_idx)
+        };
 
         if is_live && num_peers == 0 {
-            if (render_count % 600) == 0 {
-                gst::trace!(CAT, "⏭️ No peers connected in live mode, skipping buffer");
-            }
             return Ok(gst::FlowSuccess::Ok);
         }
 
+        let Some(track_index) = track_index else {
+            gst::error!(CAT, "❌ No track info for pad {}", pad_name);
+            return Err(gst::FlowError::Error);
+        };
+
+        gst::trace!(CAT, "📦 Pad {} sending buffer to track {} (size: {}, peers: {})", pad_name, track_index, buffer.size(), num_peers);
+
         let map = buffer.map_readable().map_err(|_| {
-            gst::error!(CAT, "❌ Failed to map buffer");
+            gst::error!(CAT, "Failed to map buffer");
             gst::FlowError::Error
         })?;
 
@@ -400,19 +371,25 @@ impl BaseSinkImpl for WebSink {
 
         if num_peers > 0 {
             let state = self.state.lock().unwrap();
-            if let Some(video_track) = &state.video_track {
+            if let Some(video_track) = state.video_tracks.get(track_index) {
                 match video_track {
                     server::VideoTrack::Sample(track) => {
                         let track_clone = Arc::clone(track);
                         let data_copy = bytes::Bytes::copy_from_slice(data);
                         let duration = buffer.duration().unwrap_or_else(|| gst::ClockTime::from_nseconds(33_333_333));
+                        let pad_name_clone = pad_name.to_string();
 
                         if let Some(runtime) = &state.runtime {
                             runtime.spawn(async move {
                                 let sample = Sample { data: data_copy, duration: Duration::from_nanos(duration.nseconds()), ..Default::default() };
 
-                                if let Err(e) = track_clone.write_sample(&sample).await {
-                                    gst::error!(CAT, "❌ Failed to write sample: {}", e);
+                                match track_clone.write_sample(&sample).await {
+                                    Ok(_) => {
+                                        gst::trace!(CAT, "✅ Wrote sample to track from pad {}", pad_name_clone);
+                                    }
+                                    Err(e) => {
+                                        gst::error!(CAT, "❌ Failed to write sample from pad {}: {}", pad_name_clone, e);
+                                    }
                                 }
                             });
                         }
@@ -420,6 +397,7 @@ impl BaseSinkImpl for WebSink {
                     server::VideoTrack::Rtp(track) => {
                         let track_clone = Arc::clone(track);
                         let data_copy = data.to_vec();
+                        let pad_name_clone = pad_name.to_string();
 
                         if let Some(runtime) = &state.runtime {
                             runtime.spawn(async move {
@@ -428,12 +406,17 @@ impl BaseSinkImpl for WebSink {
                                 let mut buf = &data_copy[..];
                                 match rtp::packet::Packet::unmarshal(&mut buf) {
                                     Ok(rtp_packet) => {
-                                        if let Err(e) = track_clone.write_rtp(&rtp_packet).await {
-                                            gst::error!(CAT, "❌ Failed to write RTP packet: {}", e);
+                                        match track_clone.write_rtp(&rtp_packet).await {
+                                            Ok(_) => {
+                                                gst::trace!(CAT, "✅ Wrote RTP to track from pad {}", pad_name_clone);
+                                            }
+                                            Err(e) => {
+                                                gst::error!(CAT, "❌ Failed to write RTP from pad {}: {}", pad_name_clone, e);
+                                            }
                                         }
                                     }
                                     Err(e) => {
-                                        gst::error!(CAT, "❌ Failed to parse RTP packet: {}", e);
+                                        gst::error!(CAT, "❌ Failed to parse RTP packet from pad {}: {}", pad_name_clone, e);
                                     }
                                 }
                             });
@@ -445,38 +428,152 @@ impl BaseSinkImpl for WebSink {
 
         Ok(gst::FlowSuccess::Ok)
     }
-}
 
-impl WebSink {
-    /// Create video track for the specified codec and mode
-    fn create_video_track(&self, codec: VideoCodec, mode: StreamMode) -> Result<(), gst::LoggableError> {
-        gst::debug!(CAT, "🎥 Creating video track for {} in {:?} mode", codec.name(), mode);
+    fn sink_event(&self, pad: &gst::Pad, event: gst::Event) -> bool {
+        use gst::EventView;
+
+        match event.view() {
+            EventView::Caps(e) => {
+                let caps = e.caps_owned();
+                gst::info!(CAT, "Setting caps on pad {}: {}", pad.name(), caps);
+
+                let (codec, mode) = match VideoCodec::from_caps(&caps) {
+                    Some(c) => c,
+                    None => {
+                        gst::error!(CAT, "Unsupported caps: {}", caps);
+                        return false;
+                    }
+                };
+
+                gst::info!(CAT, "Detected codec: {} in {:?} mode", codec.name(), mode);
+
+                if let Err(e) = self.create_video_track_for_pad(pad, codec, mode) {
+                    gst::error!(CAT, "Failed to create track: {}", e);
+                    return false;
+                }
+
+                true
+            }
+            _ => gst::Pad::event_default(pad, Some(&*self.obj()), event),
+        }
+    }
+
+    fn create_video_track_for_pad(&self, pad: &gst::Pad, codec: VideoCodec, mode: StreamMode) -> Result<(), gst::LoggableError> {
+        gst::debug!(CAT, "Creating video track for pad {} with {} in {:?} mode", pad.name(), codec.name(), mode);
 
         let mut state = self.state.lock().unwrap();
+
+        let track_id = format!("track_{}", pad.name());
+        let stream_id = format!("stream_{}", pad.name());
 
         let video_track = match mode {
             StreamMode::Sample => {
                 let track = Arc::new(TrackLocalStaticSample::new(
                     RTCRtpCodecCapability { mime_type: codec.mime_type().to_owned(), ..Default::default() },
-                    "video".to_owned(),
-                    "websink".to_owned(),
+                    track_id.clone(),
+                    stream_id.clone(),
                 ));
-                gst::info!(CAT, "✅ Sample mode video track created for {}", codec.name());
+                gst::info!(CAT, "✅ Sample mode video track created for {} (track: {}, stream: {})", codec.name(), track_id, stream_id);
                 server::VideoTrack::Sample(track)
             }
             StreamMode::Rtp => {
                 let track = Arc::new(TrackLocalStaticRTP::new(
                     RTCRtpCodecCapability { mime_type: codec.mime_type().to_owned(), ..Default::default() },
-                    "video".to_owned(),
-                    "websink".to_owned(),
+                    track_id.clone(),
+                    stream_id.clone(),
                 ));
-                gst::info!(CAT, "✅ RTP mode video track created for {}", codec.name());
+                gst::info!(CAT, "RTP mode video track created for {} (track: {}, stream: {})", codec.name(), track_id, stream_id);
                 server::VideoTrack::Rtp(track)
             }
         };
 
-        state.video_track = Some(video_track);
+        let track_index = state.video_tracks.len();
+        state.video_tracks.push(video_track);
+        drop(state);
 
+        let mut pad_info = self.pad_info.lock().unwrap();
+        pad_info.insert(pad.name().to_string(), PadInfo { codec, mode, track_index });
+
+        gst::info!(CAT, "Pad {} mapped to track index {}", pad.name(), track_index);
+
+        Ok(())
+    }
+
+    fn start(&self) -> Result<(), gst::ErrorMessage> {
+        gst::info!(CAT, "Starting WebSink");
+
+        let runtime = match Runtime::new() {
+            Ok(rt) => {
+                gst::info!(CAT, "Tokio runtime created successfully");
+                rt
+            }
+            Err(err) => {
+                gst::error!(CAT, "Failed to create Tokio runtime: {}", err);
+                return Err(gst::error_msg!(gst::ResourceError::Failed, ["Failed to create Tokio runtime: {}", err]));
+            }
+        };
+
+        let (tx, rx) = mpsc::channel(1);
+        gst::info!(CAT, "Created mpsc channel for live mode signaling");
+
+        let settings = self.settings.lock().unwrap();
+        let mut webrtc_config = RTCConfiguration::default();
+        if !settings.stun_server.is_empty() {
+            webrtc_config.ice_servers = vec![RTCIceServer { urls: vec![settings.stun_server.clone()], ..Default::default() }];
+            gst::info!(CAT, "STUN server configured: {}", settings.stun_server);
+        }
+        let port = settings.port;
+        drop(settings);
+
+        let mut state = self.state.lock().unwrap();
+        state.runtime = Some(runtime);
+        state.unblock_tx = Some(tx);
+        state.unblock_rx = Some(rx);
+        state.webrtc_config = Some(webrtc_config);
+
+        gst::info!(CAT, "Starting HTTP server on port {}", port);
+        let rt = state.runtime.as_ref().expect("Runtime should be initialized");
+        match self.start_http_server(port, rt) {
+            Ok((server_handle, actual_port)) => {
+                gst::info!(CAT, "HTTP server started successfully on port {}", actual_port);
+                state.server_handle = Some(server_handle);
+            }
+            Err(err) => {
+                gst::error!(CAT, "Failed to start HTTP server: {}", err);
+                return Err(gst::error_msg!(gst::ResourceError::Failed, ["Failed to start HTTP server: {}", err]));
+            }
+        }
+        gst::info!(CAT, "WebSink started successfully");
+
+        Ok(())
+    }
+
+    fn stop(&self) -> Result<(), gst::ErrorMessage> {
+        gst::info!(CAT, "Stopping WebSink");
+
+        let mut state = self.state.lock().unwrap();
+
+        if let Some(handle) = state.server_handle.take() {
+            gst::info!(CAT, "Aborting HTTP server task...");
+            handle.abort();
+        }
+
+        let peer_count = state.peer_connections.len();
+        state.peer_connections.clear();
+        gst::info!(CAT, "Cleared {} peer connections", peer_count);
+
+        state.unblock_tx = None;
+        state.unblock_rx = None;
+        state.runtime = None;
+        state.video_tracks.clear();
+        state.webrtc_config = None;
+
+        drop(state);
+
+        let mut pad_info = self.pad_info.lock().unwrap();
+        pad_info.clear();
+
+        gst::info!(CAT, "WebSink stopped successfully");
         Ok(())
     }
 
@@ -486,11 +583,7 @@ impl WebSink {
         rt: &Runtime,
     ) -> Result<(tokio::task::JoinHandle<()>, u16), Box<dyn std::error::Error + Send + Sync>> {
         gst::info!(CAT, "Starting HTTP server on port {}", port);
-
-        // Clone the state Arc to move into the async block
         let state = Arc::clone(&self.state);
-
-        // Use the server module's start_http_server function
         server::start_http_server(state, port, rt)
     }
 }
