@@ -5,10 +5,21 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
-use tiny_http::{Header, Method, Response, Server};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use uuid::Uuid;
+
+#[cfg(feature = "tiny-http")]
+use tiny_http::{Header, Method, Response, Server};
+
+#[cfg(feature = "hyper")]
+use {
+    hyper::body,
+    hyper::header::CONTENT_TYPE,
+    hyper::service::{make_service_fn, service_fn},
+    hyper::{Body, Method as HyperMethod, Request, Response as HyperResponse, Server as HyperServer, StatusCode},
+    std::convert::Infallible,
+};
 
 // WebRTC imports
 use webrtc::api::interceptor_registry::register_default_interceptors;
@@ -18,8 +29,8 @@ use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 
 // Color codes for terminal output
@@ -28,6 +39,12 @@ const RESET: &str = "\x1b[0m";
 
 // Debug category using the same category from imp.rs
 use crate::websink::imp::CAT;
+
+#[cfg(all(feature = "hyper", feature = "tiny-http"))]
+compile_error!("Features 'hyper' and 'tiny-http' cannot be enabled at the same time");
+
+#[cfg(not(any(feature = "hyper", feature = "tiny-http")))]
+compile_error!("Enable either the 'hyper' or 'tiny-http' feature for HTTP serving");
 
 // Re-export the embedded assets
 #[derive(RustEmbed)]
@@ -214,6 +231,7 @@ fn next_free_port(mut port: u16) -> u16 {
     }
 }
 
+#[cfg(feature = "tiny-http")]
 pub fn start_http_server(
     state: Arc<Mutex<State>>,
     requested_port: u16,
@@ -294,6 +312,7 @@ pub fn start_http_server(
     Ok((handle, port))
 }
 
+#[cfg(feature = "tiny-http")]
 async fn handle_session_request_http(
     mut request: tiny_http::Request,
     state: Arc<Mutex<State>>,
@@ -326,6 +345,7 @@ async fn handle_session_request_http(
     Ok(())
 }
 
+#[cfg(feature = "tiny-http")]
 fn handle_static_asset(request: tiny_http::Request) {
     let url = request.url();
     let path_to_serve = if url == "/" || url.is_empty() {
@@ -350,6 +370,143 @@ fn handle_static_asset(request: tiny_http::Request) {
             gst::warning!(CAT, "❌ Static asset not found: {}", path_to_serve);
             let not_found = Response::from_string("Not Found").with_status_code(404);
             let _ = request.respond(not_found);
+        }
+    }
+}
+
+#[cfg(feature = "hyper")]
+pub fn start_http_server(
+    state: Arc<Mutex<State>>,
+    requested_port: u16,
+    rt: &Runtime,
+) -> Result<(tokio::task::JoinHandle<()>, u16), Box<dyn std::error::Error + Send + Sync>> {
+    let port = next_free_port(requested_port);
+    gst::info!(CAT, "🔍 Found available port: {} (requested: {})", port, requested_port);
+
+    let hostname = get_hostname().ok().and_then(|h| h.into_string().ok()).unwrap_or_else(|| "localhost".to_string());
+    let mut external_ip = None;
+    if let Ok(ifaces) = get_if_addrs() {
+        for iface in ifaces {
+            if iface.is_loopback() {
+                continue;
+            }
+            if let std::net::IpAddr::V4(ipv4) = iface.ip() {
+                external_ip = Some(ipv4.to_string());
+                break;
+            }
+        }
+    }
+    let port_str = port.to_string();
+    let ext_ip = external_ip.unwrap_or_else(|| "localhost".to_string());
+    println!(
+        "{green}HTTP server started at http://{host}.local:{port} and http://{ip}:{port}{reset}",
+        green = GREEN,
+        host = hostname,
+        port = port_str,
+        ip = ext_ip,
+        reset = RESET
+    );
+
+    let addr = ([0, 0, 0, 0], port).into();
+    let state_clone = Arc::clone(&state);
+    let server = HyperServer::bind(&addr).serve(make_service_fn(move |_conn| {
+        let state = Arc::clone(&state_clone);
+        async move {
+            Ok::<_, Infallible>(service_fn(move |req| {
+                let state = Arc::clone(&state);
+                async move { handle_hyper_request(req, state).await }
+            }))
+        }
+    }));
+
+    let handle = rt.spawn(async move {
+        if let Err(e) = server.await {
+            gst::error!(CAT, "Failed to run Hyper server: {}", e);
+        }
+        gst::info!(CAT, "HTTP server on port {} stopped.", port);
+    });
+
+    Ok((handle, port))
+}
+
+#[cfg(feature = "hyper")]
+async fn handle_hyper_request(req: Request<Body>, state: Arc<Mutex<State>>) -> Result<HyperResponse<Body>, Infallible> {
+    let response = match (req.method(), req.uri().path()) {
+        (&HyperMethod::POST, "/api/session") => handle_session_request_hyper(req, state).await,
+        (&HyperMethod::GET, path) => handle_static_asset_hyper(path),
+        (method, _) => {
+            gst::debug!(CAT, "Unsupported HTTP method: {:?}", method);
+            HyperResponse::builder().status(StatusCode::METHOD_NOT_ALLOWED).body(Body::from("Method Not Allowed")).unwrap()
+        }
+    };
+
+    Ok(response)
+}
+
+#[cfg(feature = "hyper")]
+async fn handle_session_request_hyper(req: Request<Body>, state: Arc<Mutex<State>>) -> HyperResponse<Body> {
+    let bytes = match body::to_bytes(req.into_body()).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            gst::error!(CAT, "Failed to read request body: {}", e);
+            return HyperResponse::builder().status(StatusCode::BAD_REQUEST).body(Body::from("Invalid request body")).unwrap();
+        }
+    };
+
+    let body_json: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(json) => json,
+        Err(e) => {
+            gst::error!(CAT, "Failed to parse JSON body: {}", e);
+            return HyperResponse::builder().status(StatusCode::BAD_REQUEST).body(Body::from("Invalid JSON")).unwrap();
+        }
+    };
+
+    let session_request = SessionRequest { offer: body_json["offer"].clone() };
+
+    gst::info!(CAT, "🔗 Received WebRTC session request");
+
+    match handle_session_request(session_request, state).await {
+        Ok(response) => {
+            gst::info!(CAT, "✅ Successfully handled WebRTC session request");
+            match serde_json::to_vec(&response) {
+                Ok(body) => {
+                    HyperResponse::builder().status(StatusCode::OK).header(CONTENT_TYPE, "application/json").body(Body::from(body)).unwrap()
+                }
+                Err(e) => {
+                    gst::error!(CAT, "Failed to serialize response: {}", e);
+                    HyperResponse::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::from("Failed to serialize response"))
+                        .unwrap()
+                }
+            }
+        }
+        Err(e) => {
+            gst::error!(CAT, "❌ Failed to handle WebRTC session request: {}", e);
+            HyperResponse::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::from(e.to_string())).unwrap()
+        }
+    }
+}
+
+#[cfg(feature = "hyper")]
+fn handle_static_asset_hyper(path: &str) -> HyperResponse<Body> {
+    let path_to_serve = if path == "/" || path.is_empty() { "index.html" } else { path.trim_start_matches('/') };
+
+    gst::debug!(CAT, "🌐 Static asset request for: {}", path_to_serve);
+
+    match Asset::get(path_to_serve) {
+        Some(content) => {
+            let mime = mime_guess::from_path(path_to_serve).first_or_octet_stream();
+            gst::debug!(CAT, "✅ Serving static asset: {} ({} bytes, mime: {})", path_to_serve, content.data.len(), mime.as_ref());
+            HyperResponse::builder()
+                .status(StatusCode::OK)
+                .header(CONTENT_TYPE, mime.as_ref())
+                .body(Body::from(content.data.into_owned()))
+                .unwrap()
+        }
+        None => {
+            gst::warning!(CAT, "❌ Static asset not found: {}", path_to_serve);
+            HyperResponse::builder().status(StatusCode::NOT_FOUND).body(Body::from("Not Found")).unwrap()
         }
     }
 }
