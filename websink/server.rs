@@ -3,12 +3,16 @@ use hostname::get as get_hostname;
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
-use tiny_http::{Header, Method, Response, Server};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use uuid::Uuid;
+use warp::filters::path::FullPath;
+use warp::http::{header::CONTENT_TYPE, Response as HttpResponse, StatusCode};
+use warp::hyper::Body;
+use warp::Filter;
 
 // WebRTC imports
 use webrtc::api::interceptor_registry::register_default_interceptors;
@@ -18,8 +22,8 @@ use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 
 // Color codes for terminal output
@@ -248,108 +252,71 @@ pub fn start_http_server(
         reset = RESET
     );
 
+    let routes = {
+        let state_for_route = Arc::clone(&state);
+        let session_route = warp::path!("api" / "session")
+            .and(warp::post())
+            .and(warp::body::json())
+            .and(warp::any().map(move || Arc::clone(&state_for_route)))
+            .and_then(session_route_handler);
+
+        let static_route = warp::get().and(warp::path::full()).and_then(serve_static_asset);
+
+        session_route.or(static_route)
+    };
+
+    let port_for_log = port;
     let handle = rt.spawn(async move {
-        let server = match Server::http(format!("[::]:{}", port)) {
-            Ok(server) => server,
-            Err(e) => {
-                gst::error!(CAT, "Failed to start HTTP server: {}", e);
-                return;
-            }
-        };
-
-        // Handle each request in a blocking manner since tiny_http is synchronous
-        let rt_handle = tokio::runtime::Handle::current();
-        std::thread::spawn(move || {
-            for request in server.incoming_requests() {
-                let state_clone = Arc::clone(&state);
-
-                match request.method() {
-                    Method::Post => {
-                        if request.url() == "/api/session" {
-                            // Handle WebRTC session request - spawn async task
-                            let request_result = rt_handle.block_on(async { handle_session_request_http(request, state_clone).await });
-                            if let Err(e) = request_result {
-                                gst::error!(CAT, "Failed to handle session request: {}", e);
-                            }
-                        } else {
-                            let not_found = Response::from_string("Not Found").with_status_code(404);
-                            let _ = request.respond(not_found);
-                        }
-                    }
-                    Method::Get => {
-                        // Handle static assets
-                        handle_static_asset(request);
-                    }
-                    _ => {
-                        let method_not_allowed = Response::from_string("Method Not Allowed").with_status_code(405);
-                        let _ = request.respond(method_not_allowed);
-                    }
-                }
-            }
-        });
-
-        gst::info!(CAT, "HTTP server on port {} stopped.", port);
+        warp::serve(routes)
+            .run(([0, 0, 0, 0, 0, 0, 0, 0], port_for_log))
+            .await;
+        gst::info!(CAT, "HTTP server on port {} stopped.", port_for_log);
     });
 
     Ok((handle, port))
 }
 
-async fn handle_session_request_http(
-    mut request: tiny_http::Request,
-    state: Arc<Mutex<State>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // For simplicity, parse a minimal JSON body
-    let mut body = String::new();
-    request.as_reader().read_to_string(&mut body)?;
-
-    // Parse the session request from JSON
-    let body_json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let session_request = SessionRequest { offer: body_json["offer"].clone() };
-
+async fn session_route_handler(session_request: SessionRequest, state: Arc<Mutex<State>>) -> Result<impl warp::Reply, Infallible> {
     gst::info!(CAT, "🔗 Received WebRTC session request");
 
-    match handle_session_request(session_request, state).await {
+    let reply = match handle_session_request(session_request, state).await {
         Ok(response) => {
             gst::info!(CAT, "✅ Successfully handled WebRTC session request");
-            let response_json = serde_json::to_string(&response)?;
-            let http_response = Response::from_string(response_json)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-            request.respond(http_response).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            warp::reply::with_status(warp::reply::json(&response), StatusCode::OK)
         }
         Err(e) => {
             gst::error!(CAT, "❌ Failed to handle WebRTC session request: {}", e);
-            let error_response = Response::from_string(e.to_string()).with_status_code(500);
-            request.respond(error_response).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            let error = serde_json::json!({ "error": e.to_string() });
+            warp::reply::with_status(warp::reply::json(&error), StatusCode::INTERNAL_SERVER_ERROR)
         }
-    }
-
-    Ok(())
-}
-
-fn handle_static_asset(request: tiny_http::Request) {
-    let url = request.url();
-    let path_to_serve = if url == "/" || url.is_empty() {
-        "index.html"
-    } else {
-        &url[1..] // Remove leading slash
     };
 
-    gst::debug!(CAT, "🌐 Static asset request for: {}", path_to_serve);
+    Ok(reply)
+}
 
-    match Asset::get(path_to_serve) {
+async fn serve_static_asset(path: FullPath) -> Result<impl warp::Reply, Infallible> {
+    let requested_path = path.as_str();
+    let asset_path = if requested_path == "/" || requested_path.is_empty() {
+        "index.html".to_string()
+    } else {
+        requested_path.trim_start_matches('/').to_string()
+    };
+
+    gst::debug!(CAT, "🌐 Static asset request for: {}", asset_path);
+
+    let response = match Asset::get(&asset_path) {
         Some(content) => {
-            let mime = mime_guess::from_path(path_to_serve).first_or_octet_stream();
-            let data: &[u8] = &content.data;
-            gst::debug!(CAT, "✅ Serving static asset: {} ({} bytes, mime: {})", path_to_serve, data.len(), mime.as_ref());
+            let mime = mime_guess::from_path(&asset_path).first_or_octet_stream();
+            let data = content.data.into_owned();
+            gst::debug!(CAT, "✅ Serving static asset: {} ({} bytes, mime: {})", asset_path, data.len(), mime.as_ref());
 
-            let response =
-                Response::from_data(data).with_header(Header::from_bytes(&b"Content-Type"[..], mime.as_ref().as_bytes()).unwrap());
-            let _ = request.respond(response);
+            HttpResponse::builder().status(StatusCode::OK).header(CONTENT_TYPE, mime.as_ref()).body(Body::from(data)).unwrap()
         }
         None => {
-            gst::warning!(CAT, "❌ Static asset not found: {}", path_to_serve);
-            let not_found = Response::from_string("Not Found").with_status_code(404);
-            let _ = request.respond(not_found);
+            gst::warning!(CAT, "❌ Static asset not found: {}", asset_path);
+            HttpResponse::builder().status(StatusCode::NOT_FOUND).body(Body::from("Not Found")).unwrap()
         }
-    }
+    };
+
+    Ok(response)
 }
