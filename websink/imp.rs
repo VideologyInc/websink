@@ -16,8 +16,8 @@ use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
-use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocalWriter;
 
 // Import from our server module
@@ -262,7 +262,8 @@ impl BaseSinkImpl for WebSink {
         gst::info!(CAT, "🎯 Setting caps: {}", caps);
 
         // Detect codec and stream mode from caps
-        let (codec, mode) = VideoCodec::from_caps(caps).ok_or_else(|| gst::loggable_error!(CAT, "Unsupported video format in caps: {}", caps))?;
+        let (codec, mode) =
+            VideoCodec::from_caps(caps).ok_or_else(|| gst::loggable_error!(CAT, "Unsupported video format in caps: {}", caps))?;
 
         gst::info!(CAT, "🎥 Detected codec: {} in {:?} mode", codec.name(), mode);
 
@@ -409,7 +410,8 @@ impl BaseSinkImpl for WebSink {
 
                         if let Some(runtime) = &state.runtime {
                             runtime.spawn(async move {
-                                let sample = Sample { data: data_copy, duration: Duration::from_nanos(duration.nseconds()), ..Default::default() };
+                                let sample =
+                                    Sample { data: data_copy, duration: Duration::from_nanos(duration.nseconds()), ..Default::default() };
 
                                 if let Err(e) = track_clone.write_sample(&sample).await {
                                     gst::error!(CAT, "❌ Failed to write sample: {}", e);
