@@ -1,3 +1,10 @@
+use axum::{
+    extract::State as AxumState,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
 use get_if_addrs::get_if_addrs;
 use hostname::get as get_hostname;
 use rust_embed::RustEmbed;
@@ -5,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
-use tiny_http::{Header, Method, Response, Server};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -18,8 +24,8 @@ use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 
 // Color codes for terminal output
@@ -214,6 +220,55 @@ fn next_free_port(mut port: u16) -> u16 {
     }
 }
 
+async fn handle_session(
+    AxumState(state): AxumState<Arc<Mutex<State>>>,
+    Json(req): Json<SessionRequest>,
+) -> Result<Json<SessionResponse>, AppError> {
+    gst::info!(CAT, "Received WebRTC session request");
+    let response = handle_session_request(req, state).await?;
+    gst::info!(CAT, "Successfully handled WebRTC session request");
+    Ok(Json(response))
+}
+
+async fn serve_static(uri: axum::http::Uri) -> impl IntoResponse {
+    let path = uri.path().trim_start_matches('/');
+    let path_to_serve = if path.is_empty() { "index.html" } else { path };
+
+    gst::debug!(CAT, "Static asset request for: {}", path_to_serve);
+
+    match Asset::get(path_to_serve) {
+        Some(content) => {
+            let mime = mime_guess::from_path(path_to_serve).first_or_octet_stream();
+            let data: &[u8] = &content.data;
+            gst::debug!(CAT, "Serving static asset: {} ({} bytes, mime: {})", path_to_serve, data.len(), mime.as_ref());
+
+            Response::builder().header("Content-Type", mime.as_ref()).body(axum::body::Body::from(data.to_vec())).unwrap()
+        }
+        None => {
+            gst::warning!(CAT, "Static asset not found: {}", path_to_serve);
+            Response::builder().status(StatusCode::NOT_FOUND).body(axum::body::Body::from("Not Found")).unwrap()
+        }
+    }
+}
+
+struct AppError(Box<dyn std::error::Error + Send + Sync>);
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        gst::error!(CAT, "Failed to handle WebRTC session request: {}", self.0);
+        (StatusCode::INTERNAL_SERVER_ERROR, self.0.to_string()).into_response()
+    }
+}
+
+impl<E> From<E> for AppError
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    fn from(err: E) -> Self {
+        Self(err.into())
+    }
+}
+
 pub fn start_http_server(
     state: Arc<Mutex<State>>,
     requested_port: u16,
@@ -248,108 +303,25 @@ pub fn start_http_server(
         reset = RESET
     );
 
+    let app = Router::new().route("/api/session", post(handle_session)).fallback(get(serve_static)).with_state(state);
+
+    let addr = format!("[::]:{}", port);
+
     let handle = rt.spawn(async move {
-        let server = match Server::http(format!("[::]:{}", port)) {
-            Ok(server) => server,
+        let listener = match tokio::net::TcpListener::bind(&addr).await {
+            Ok(l) => l,
             Err(e) => {
-                gst::error!(CAT, "Failed to start HTTP server: {}", e);
+                gst::error!(CAT, "Failed to bind to {}: {}", addr, e);
                 return;
             }
         };
 
-        // Handle each request in a blocking manner since tiny_http is synchronous
-        let rt_handle = tokio::runtime::Handle::current();
-        std::thread::spawn(move || {
-            for request in server.incoming_requests() {
-                let state_clone = Arc::clone(&state);
-
-                match request.method() {
-                    Method::Post => {
-                        if request.url() == "/api/session" {
-                            // Handle WebRTC session request - spawn async task
-                            let request_result = rt_handle.block_on(async { handle_session_request_http(request, state_clone).await });
-                            if let Err(e) = request_result {
-                                gst::error!(CAT, "Failed to handle session request: {}", e);
-                            }
-                        } else {
-                            let not_found = Response::from_string("Not Found").with_status_code(404);
-                            let _ = request.respond(not_found);
-                        }
-                    }
-                    Method::Get => {
-                        // Handle static assets
-                        handle_static_asset(request);
-                    }
-                    _ => {
-                        let method_not_allowed = Response::from_string("Method Not Allowed").with_status_code(405);
-                        let _ = request.respond(method_not_allowed);
-                    }
-                }
-            }
-        });
-
-        gst::info!(CAT, "HTTP server on port {} stopped.", port);
+        gst::info!(CAT, "Starting HTTP server on {}", addr);
+        if let Err(e) = axum::serve(listener, app).await {
+            gst::error!(CAT, "HTTP server error: {}", e);
+        }
+        gst::info!(CAT, "HTTP server stopped");
     });
 
     Ok((handle, port))
-}
-
-async fn handle_session_request_http(
-    mut request: tiny_http::Request,
-    state: Arc<Mutex<State>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // For simplicity, parse a minimal JSON body
-    let mut body = String::new();
-    request.as_reader().read_to_string(&mut body)?;
-
-    // Parse the session request from JSON
-    let body_json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let session_request = SessionRequest { offer: body_json["offer"].clone() };
-
-    gst::info!(CAT, "🔗 Received WebRTC session request");
-
-    match handle_session_request(session_request, state).await {
-        Ok(response) => {
-            gst::info!(CAT, "✅ Successfully handled WebRTC session request");
-            let response_json = serde_json::to_string(&response)?;
-            let http_response = Response::from_string(response_json)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-            request.respond(http_response).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-        }
-        Err(e) => {
-            gst::error!(CAT, "❌ Failed to handle WebRTC session request: {}", e);
-            let error_response = Response::from_string(e.to_string()).with_status_code(500);
-            request.respond(error_response).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-        }
-    }
-
-    Ok(())
-}
-
-fn handle_static_asset(request: tiny_http::Request) {
-    let url = request.url();
-    let path_to_serve = if url == "/" || url.is_empty() {
-        "index.html"
-    } else {
-        &url[1..] // Remove leading slash
-    };
-
-    gst::debug!(CAT, "🌐 Static asset request for: {}", path_to_serve);
-
-    match Asset::get(path_to_serve) {
-        Some(content) => {
-            let mime = mime_guess::from_path(path_to_serve).first_or_octet_stream();
-            let data: &[u8] = &content.data;
-            gst::debug!(CAT, "✅ Serving static asset: {} ({} bytes, mime: {})", path_to_serve, data.len(), mime.as_ref());
-
-            let response =
-                Response::from_data(data).with_header(Header::from_bytes(&b"Content-Type"[..], mime.as_ref().as_bytes()).unwrap());
-            let _ = request.respond(response);
-        }
-        None => {
-            gst::warning!(CAT, "❌ Static asset not found: {}", path_to_serve);
-            let not_found = Response::from_string("Not Found").with_status_code(404);
-            let _ = request.respond(not_found);
-        }
-    }
 }
