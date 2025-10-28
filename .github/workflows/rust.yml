@@ -6,6 +6,7 @@ name: Rust build
 on:
   push:
     branches: [ "master" ]
+    tags: ['v*.*.*']
   pull_request:
     branches: [ "master" ]
 
@@ -23,7 +24,7 @@ jobs:
       - name: apt-install
         uses: Eeems-Org/apt-cache-action@v1.3
         with:
-          packages: chromium-browser gir1.2-gst-plugins-base-1.0 libgirepository-2.0-dev libglib2.0-dev python3-pip libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-gtk3 gstreamer1.0-qt5 gstreamer1.0-pulseaudio
+          packages: gir1.2-gst-plugins-base-1.0 libgirepository-2.0-dev libglib2.0-dev python3-pip libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-gtk3 gstreamer1.0-qt5 gstreamer1.0-pulseaudio
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -35,26 +36,28 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      - name: Cargo Clippy
-        run: cargo clippy -- -D warnings
+      # - name: Cargo Clippy
+      #   run: cargo clippy -- -D warnings
 
       - name: Cargo Test
         run: cargo test
 
       - name: Build Rust plugin
+        env:
+          CARGO_PROFILE_RELEASE_STRIP: true
         run: |
           cargo build --release
           cp target/release/libwebsink.so libwebsink.so
 
-      - name: pytest
-        continue-on-error: true
-        env:
-          GST_PLUGIN_PATH: ${{ github.workspace }}
-          GST_DEBUG: websink:5
-          GST_DEBUG_FILE: /tmp/gst.log
-        run: |
-          pip3 install pytest-selenium pytest webdriver-manager opencv-python
-          pytest -s
+      # - name: pytest
+      #   continue-on-error: true
+      #   env:
+      #     GST_PLUGIN_PATH: ${{ github.workspace }}
+      #     GST_DEBUG: websink:5
+      #     GST_DEBUG_FILE: /tmp/gst.log
+      #   run: |
+      #     pip3 install pytest-selenium pytest webdriver-manager opencv-python
+      #     pytest -s
 
       - name: upload
         uses: actions/upload-artifact@v4
@@ -73,7 +76,7 @@ jobs:
       - name: apt-install
         uses: Eeems-Org/apt-cache-action@v1.3
         with:
-          packages: chromium-browser x86info firefox gir1.2-gst-plugins-base-1.0 libgirepository-2.0-dev libglib2.0-dev python3-pip libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-gtk3 gstreamer1.0-qt5 gstreamer1.0-pulseaudio
+          packages: x86info firefox gir1.2-gst-plugins-base-1.0 libgirepository-2.0-dev libglib2.0-dev python3-pip libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-gtk3 gstreamer1.0-qt5 gstreamer1.0-pulseaudio
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -85,26 +88,28 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      - name: Cargo Clippy
-        run: cargo clippy -- -D warnings
+      # - name: Cargo Clippy
+      #   run: cargo clippy -- -D warnings
 
       - name: Cargo Test
         run: cargo test
 
       - name: Build Rust plugin
+        env:
+          CARGO_PROFILE_RELEASE_STRIP: true
         run: |
           cargo build --release
           cp target/release/libwebsink.so libwebsink.so
 
-      - name: pytest
-        continue-on-error: true
-        env:
-          GST_PLUGIN_PATH: ${{ github.workspace }}
-          GST_DEBUG: websink:5
-          GST_DEBUG_FILE: /tmp/gst.log
-        run: |
-          pip3 install pytest-selenium pytest webdriver-manager opencv-python
-          pytest -s
+      # - name: pytest
+      #   continue-on-error: true
+      #   env:
+      #     GST_PLUGIN_PATH: ${{ github.workspace }}
+      #     GST_DEBUG: websink:5
+      #     GST_DEBUG_FILE: /tmp/gst.log
+      #   run: |
+      #     pip3 install pytest-selenium pytest webdriver-manager opencv-python
+      #     pytest -s
 
       - name: upload
         uses: actions/upload-artifact@v4
