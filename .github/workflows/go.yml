@@ -92,33 +92,33 @@ jobs:
           name: x64-lib
           path: libwebsink.so
 
-  release:
-    name: Create Release
-    needs: [cgo-action-arm, cgo-action-x64]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+  # release:
+  #   name: Create Release
+  #   needs: [cgo-action-arm, cgo-action-x64]
+  #   runs-on: ubuntu-latest
+  #   if: startsWith(github.ref, 'refs/tags/')
 
-    steps:
-      - name: Download ARM artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: arm-lib
-          path: ./artifacts/arm
+  #   steps:
+  #     - name: Download ARM artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: arm-lib
+  #         path: ./artifacts/arm
 
-      - name: Download x64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: x64-lib
-          path: ./artifacts/x64
+  #     - name: Download x64 artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: x64-lib
+  #         path: ./artifacts/x64
 
-      - name: rename
-        run: |
-          mv ./artifacts/arm/libwebsink.so ./libwebsink-arm.so
-          mv ./artifacts/x64/libwebsink.so ./libwebsink-x64.so
+  #     - name: rename
+  #       run: |
+  #         mv ./artifacts/arm/libwebsink.so ./libwebsink-arm.so
+  #         mv ./artifacts/x64/libwebsink.so ./libwebsink-x64.so
 
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            ./libwebsink-arm.so
-            ./libwebsink-x64.so
+  #     - name: Release
+  #       uses: softprops/action-gh-release@v2
+  #       with:
+  #         files: |
+  #           ./libwebsink-arm.so
+  #           ./libwebsink-x64.so
